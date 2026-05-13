@@ -429,8 +429,10 @@ def load_config():
     return {}
 
 def save_config(cfg):
+    # Don't save the password to disk
+    filtered_cfg = {k: v for k, v in cfg.items() if k != "password"}
     with open(CONFIG_PATH, "w") as f:
-        json.dump(cfg, f, indent=2)
+        json.dump(filtered_cfg, f, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -527,8 +529,62 @@ def natural_sort_key(val):
 # Settings dialog
 # ---------------------------------------------------------------------------
 
+class PasswordDialog(tk.Toplevel):
+    """Modal dialog for KovaaKs password prompt on startup."""
+
+    def __init__(self, parent, username):
+        super().__init__(parent)
+        self.title("KovaaKs Login")
+        self.configure(bg=BG)
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.result = None
+
+        pad = {"padx": 20, "pady": 10}
+        
+        ttk.Label(self, text=f"Logging in as: {username}", style="Dark.TLabel").pack(**pad)
+        
+        frame = tk.Frame(self, bg=BG)
+        frame.pack(fill="x", padx=20)
+        
+        ttk.Label(frame, text="Password:", style="Dark.TLabel").pack(side="left")
+        self._entry_var = tk.StringVar()
+        self._entry = tk.Entry(frame, textvariable=self._entry_var, width=30,
+                               bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
+                               font=("Segoe UI", 11), relief="flat", bd=4,
+                               show="*")
+        self._entry.pack(side="left", padx=10)
+        self._entry.focus_set()
+        
+        btn_frame = tk.Frame(self, bg=BG)
+        btn_frame.pack(pady=20)
+
+        tk.Button(btn_frame, text="  Login  ", command=self._on_login,
+                  bg=ACCENT, fg="#fff", activebackground=ACCENT_HOVER,
+                  activeforeground="#fff", font=("Segoe UI", 10, "bold"),
+                  relief="flat", bd=0, padx=14, pady=6, cursor="hand2").pack(side="left", padx=8)
+
+        tk.Button(btn_frame, text="  Cancel  ", command=self.destroy,
+                  bg=BG_LIGHTER, fg=TEXT, activebackground=BORDER,
+                  activeforeground=TEXT, font=("Segoe UI", 10),
+                  relief="flat", bd=0, padx=14, pady=6, cursor="hand2").pack(side="left", padx=8)
+
+        self.bind("<Return>", lambda e: self._on_login())
+        self.bind("<Escape>", lambda e: self.destroy())
+
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+
+    def _on_login(self):
+        self.result = self._entry_var.get().strip()
+        self.destroy()
+
 class SettingsDialog(tk.Toplevel):
-    """Modal dialog for KovaaKs username and password."""
+    """Modal dialog for KovaaKs username and other settings."""
 
     def __init__(self, parent, cfg):
         super().__init__(parent)
@@ -545,7 +601,7 @@ class SettingsDialog(tk.Toplevel):
 
         fields = [
             ("KovaaKs Username", "username", cfg.get("username", "")),
-            ("KovaaKs Password", "password", cfg.get("password", "")),
+            ("KovaaKs Password (Session Only)", "password", cfg.get("password", "")),
             ("Stats Folder", "stats_dir", cfg.get("stats_dir", get_default_stats_dir())),
             ("Min Entries for Fetching", "min_entries", cfg.get("min_entries", "1000")),
         ]
@@ -713,9 +769,12 @@ class KovaaksApp(tk.Tk):
         # Load cache and populate view immediately
         self._load_cache_and_populate()
 
-        # Show settings on first run
-        if not self._cfg.get("username") or not self._cfg.get("password"):
+        # Authentication on startup
+        self._password = None
+        if not self._cfg.get("username"):
             self.after(300, self._on_settings)
+        else:
+            self.after(300, self._get_password)
 
         self._start_stats_polling()
         logger.info("Application started")
@@ -737,10 +796,27 @@ class KovaaksApp(tk.Tk):
         path = self._cfg.get("stats_dir", get_default_stats_dir())
         return os.path.expanduser(path) if path else ""
 
+    def _get_password(self):
+        """Prompt for password if not available in memory."""
+        if self._password:
+            return self._password
+        
+        username = self._cfg.get("username", "").strip()
+        if not username:
+            self._on_settings()
+            return None
+            
+        dlg = PasswordDialog(self, username)
+        self.wait_window(dlg)
+        if dlg.result:
+            self._password = dlg.result
+            return self._password
+        return None
+
     def _auto_refresh_step(self):
         if self._cfg.get("auto_refresh", False) and not self._running:
             username = self._cfg.get("username", "").strip()
-            password = self._cfg.get("password", "").strip()
+            password = self._password
             if username and password:
                 self._update_status("Auto-refreshing...")
                 self._set_running(True, "Auto-refreshing…")
@@ -1210,6 +1286,9 @@ class KovaaksApp(tk.Tk):
         dlg = SettingsDialog(self, self._cfg)
         self.wait_window(dlg)
         if dlg.result:
+            new_password = dlg.result.pop("password", None)
+            if new_password:
+                self._password = new_password
             self._cfg.update(dlg.result)
             save_config(self._cfg)
             self._update_status("Settings saved.")
@@ -1368,11 +1447,8 @@ class KovaaksApp(tk.Tk):
                                    "Please configure your KovaaKs username in Settings.")
             self._on_settings()
             return
-        password = self._cfg.get("password", "").strip()
+        password = self._get_password()
         if not password:
-            messagebox.showwarning("Settings required",
-                                   "Please configure your KovaaKs password in Settings.")
-            self._on_settings()
             return
         if self._running:
             return
@@ -2118,7 +2194,7 @@ class KovaaksApp(tk.Tk):
             
         if not self._jwt_token:
             username = self._cfg.get("username", "").strip()
-            password = self._cfg.get("password", "").strip()
+            password = self._password
             if not username or not password:
                 return
             try:
