@@ -782,12 +782,10 @@ class KovaaksApp(tk.Tk):
         # Load cache and populate view immediately
         self._load_cache_and_populate()
 
-        # Authentication on startup
+        # Authentication on startup (delayed until needed)
         self._password = None
         if not self._cfg.get("username"):
             self.after(300, self._on_settings)
-        else:
-            self.after(300, self._get_password)
 
         self._start_stats_polling()
         logger.info("Application started")
@@ -797,13 +795,9 @@ class KovaaksApp(tk.Tk):
         
         # Schedule auto refresh
         self._auto_refresh_id = None
-        interval_min = 60
-        try:
-            interval_min = int(self._cfg.get("refresh_interval", "60"))
-        except ValueError:
-            pass
-        if interval_min < 1: interval_min = 1
-        self._auto_refresh_id = self.after(interval_min * 60000, self._auto_refresh_step)
+        if self._cfg.get("auto_refresh", False):
+            # Initial check after 5 seconds, then periodic
+            self.after(5000, self._auto_refresh_step)
 
     def _get_stats_dir(self):
         path = self._cfg.get("stats_dir", get_default_stats_dir())
@@ -880,16 +874,21 @@ class KovaaksApp(tk.Tk):
                     return
 
             username = self._cfg.get("username", "").strip()
-            password = self._password
-            if username and password:
-                self._update_status("Auto-refreshing...")
-                self._set_running(True, "Auto-refreshing…")
-                threading.Thread(target=self._do_fetch_all, args=(username, password), daemon=True).start()
+            if username:
+                # Always trigger fetch; _on_fetch_all and _do_fetch_all will handle 
+                # skipping scores if password is missing
+                self._on_fetch_all(force_login=False)
         
         self._schedule_next_auto_refresh()
 
     def _schedule_next_auto_refresh(self):
-        # Reschedule
+        if self._auto_refresh_id:
+            self.after_cancel(self._auto_refresh_id)
+            self._auto_refresh_id = None
+            
+        if not self._cfg.get("auto_refresh", False):
+            return
+
         interval_min = 60
         try:
             interval_min = int(self._cfg.get("refresh_interval", "60"))
@@ -897,8 +896,6 @@ class KovaaksApp(tk.Tk):
             pass
         if interval_min < 1: interval_min = 1
         
-        if self._auto_refresh_id:
-            self.after_cancel(self._auto_refresh_id)
         self._auto_refresh_id = self.after(interval_min * 60000, self._auto_refresh_step)
 
     # -------------------------------------------------------------------
@@ -1358,16 +1355,7 @@ class KovaaksApp(tk.Tk):
             self._update_status("Settings saved.")
 
             # Update auto-refresh timer
-            if self._auto_refresh_id:
-                self.after_cancel(self._auto_refresh_id)
-            
-            interval_min = 60
-            try:
-                interval_min = int(self._cfg.get("refresh_interval", "60"))
-            except ValueError:
-                pass
-            if interval_min < 1: interval_min = 1
-            self._auto_refresh_id = self.after(interval_min * 60000, self._auto_refresh_step)
+            self._schedule_next_auto_refresh()
 
             new_stats_dir = self._cfg.get("stats_dir")
             if old_stats_dir != new_stats_dir:
@@ -1504,16 +1492,20 @@ class KovaaksApp(tk.Tk):
             btn.configure(state=state)
         self._status_var.set(status)
 
-    def _on_fetch_all(self):
+    def _on_fetch_all(self, force_login=True):
         username = self._cfg.get("username", "").strip()
         if not username:
             messagebox.showwarning("Username required",
                                    "Please configure your KovaaKs username in Settings.")
             self._on_settings()
             return
-        password = self._get_password()
-        if not password:
-            return
+            
+        password = self._password
+        if not password and force_login:
+            password = self._get_password()
+            if not password:
+                return
+
         if self._running:
             return
 
@@ -1523,19 +1515,8 @@ class KovaaksApp(tk.Tk):
 
     def _do_fetch_all(self, username, password):
         try:
-            # ── Step 1: Login ──
-            self._update_status("Logging in to KovaaKs…")
-            try:
-                self._jwt_token = kovaaks_login(username, password)
-            except requests.exceptions.HTTPError as e:
-                if e.response is not None and e.response.status_code == 401:
-                    self._update_status("Error: Invalid KovaaKs username or password.")
-                else:
-                    self._update_status(f"Login error: {e}")
-                return
-            logger.debug("JWT token obtained (length=%d)", len(self._jwt_token))
-
-            # ── Step 2: Fetch all scenarios (try GitHub first, fallback to API) ──
+            # ── Step 1: Fetch all scenarios (try GitHub first, fallback to API) ──
+            # Reordered: Do public GitHub fetch BEFORE login
             self._update_status("Fetching all scenarios…")
 
             # Reuse cache loaded at startup
@@ -1562,26 +1543,23 @@ class KovaaksApp(tk.Tk):
                         logger.info("Successfully fetched %d scenarios from GitHub", len(all_scenarios))
                     except json.JSONDecodeError as je:
                         logger.error("Failed to decode scenarios.json: %s", je)
-                        logger.debug("First 200 chars of response: %s", resp.text[:200])
                 else:
                     logger.warning("GitHub returned non-200 status: %d", resp.status_code)
             except Exception as e:
                 logger.warning("Failed to fetch scenarios from GitHub: %s", e)
 
-            # ── Step 2b: Fetch scenario history from GitHub ──
+            # ── Step 1b: Fetch scenario history from GitHub ──
             history_url = "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios_history.json.gz"
             try:
                 logger.info("Attempting to fetch history from GitHub: %s", history_url)
                 resp = requests.get(history_url, timeout=30)
                 if resp.status_code == 200:
-                    # Update ETags in config
                     etag = resp.headers.get("ETag") or resp.headers.get("Last-Modified")
                     if etag:
                         if "last_etags" not in self._cfg: self._cfg["last_etags"] = {}
                         self._cfg["last_etags"]["scenarios_history.json.gz"] = etag
 
                     try:
-                        # Decompress Gzip history
                         with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as f:
                             ext_history = json.load(f)
                         
@@ -1594,8 +1572,6 @@ class KovaaksApp(tk.Tk):
                             for lid, counts in h_data.items():
                                 if lid not in local_history:
                                     local_history[lid] = {}
-                                
-                                # Map counts back to timestamps
                                 for i, count in enumerate(counts):
                                     if count is not None and i < len(h_timestamps):
                                         ts = h_timestamps[i]
@@ -1607,21 +1583,16 @@ class KovaaksApp(tk.Tk):
                             logger.info("Merged %d history points from GitHub", merged_count)
                     except Exception as je:
                         logger.error("Failed to parse history.json.gz: %s", je)
-                else:
-                    logger.warning("History file not found on GitHub (status %d)", resp.status_code)
             except Exception as e:
                 logger.warning("Failed to fetch history from GitHub: %s", e)
 
+            # Fallback to API if GitHub failed
             if not all_scenarios:
-                self._update_status("Fetching all scenarios (API fallback)…")
-                # Estimates for the two stages
-                est_s1 = get_estimated_fetch_count(min_entries_threshold)
-                est_s2 = get_estimated_matching_count(min_entries_threshold)
-                total_est = est_s1 + est_s2
+                self._update_status("Fetching scenarios (API fallback)…")
+                total_est = get_estimated_fetch_count(min_entries_threshold) + get_estimated_matching_count(min_entries_threshold)
 
                 def stage1_callback(done, total, msg):
                     self._update_status(msg)
-                    # Map stage 1 to its portion of total_est
                     prog = done / total_est if total_est > 0 else 0
                     self._update_progress(min(0.95, prog), 1.0)
 
@@ -1632,17 +1603,19 @@ class KovaaksApp(tk.Tk):
                     progress_callback=stage1_callback
                 )
                 logger.info("API returned %d total scenarios", len(all_scenarios))
-                
-                # Only update local scenario cache if we did a full API fetch
                 scores_cache["scenarios"] = all_scenarios
-                try:
-                    with open(SCORES_CACHE, "w", encoding="utf-8") as f:
-                        json.dump(scores_cache, f, separators=(",", ":"))
-                    logger.info("Saved scenarios to local cache %s", SCORES_CACHE)
-                except OSError as e:
-                    logger.warning("Could not save cache: %s", e)
             else:
-                self._update_progress(0.4, 1.0) # Instant progress jump for repo fetch
+                # Update cache with GitHub scenarios
+                scores_cache["scenarios"] = all_scenarios
+                self._update_progress(0.4, 1.0)
+
+            # SAVE CACHE IMMEDIATELY after public data is fetched
+            try:
+                with open(SCORES_CACHE, "w", encoding="utf-8") as f:
+                    json.dump(scores_cache, f, separators=(",", ":"))
+                logger.info("Saved GitHub/API scenarios and history to local cache")
+            except OSError as e:
+                logger.warning("Could not save initial cache: %s", e)
 
             # Filter to min_entries_threshold
             master = []
@@ -1656,8 +1629,8 @@ class KovaaksApp(tk.Tk):
                     master.append(s)
 
             logger.info("Filtered to %d scenarios with >=%d entries", len(master), min_entries_threshold)
-            self._update_status(f"{len(master)} scenarios with ≥{min_entries_threshold} entries.")
-
+            
+            # Record current entry counts for history trend
             now_str = datetime.datetime.now().isoformat()
             history = scores_cache.get("entry_history", {})
             for s in master:
@@ -1670,59 +1643,61 @@ class KovaaksApp(tk.Tk):
                 if lid not in history:
                     history[lid] = {}
                 history[lid][now_str] = entries
-                
-                # Prune to last 48 records max (e.g. 2 days of hourly data)
                 if len(history[lid]) > 48:
                     oldest_key = min(history[lid].keys())
                     del history[lid][oldest_key]
-                    
             scores_cache["entry_history"] = history
 
             # Build lid → scenario info map
-            scenario_info = {}  # lid → {name, entries}
-            for s in master:
-                lid = str(s.get("leaderboardId", ""))
-                scenario_info[lid] = {
-                    "name": s.get("scenarioName", ""),
-                    "entries": s.get("counts", {}).get("entries", ""),
-                }
+            scenario_info = {str(s.get("leaderboardId", "")): {
+                "name": s.get("scenarioName", ""),
+                "entries": s.get("counts", {}).get("entries", ""),
+            } for s in master}
 
-            # ── Step 3+4: Fetch user + friends' scores together (concurrent) ──
-            # The friends endpoint returns the logged-in user's own score too,
-            # with the correct rank even for tied scores.
+            self._scenario_info = scenario_info
+            
+            # ── Step 2: Login (Optional) ──
+            self._jwt_token = None
+            if password:
+                self._update_status("Logging in to KovaaKs…")
+                try:
+                    self._jwt_token = kovaaks_login(username, password)
+                except Exception as e:
+                    logger.warning("Login failed, skipping score fetch: %s", e)
+                    self._update_status("Login failed — showing scenario list only.")
 
-            # Clear scores so everything is re-fetched
-            scores_data = {}
-
-            # Pre-populate from cache
-            user_by_lid = {}    # lid → {rank, score, date}
-            friends_by_lid = {} # lid → list of {friend, rank, score}
+            # ── Step 3: Fetch user + friends' scores (Only if logged in) ──
+            # Load existing scores from cache to avoid redundant fetching
+            scores_data = scores_cache.get("scores", {})
+            user_by_lid = {}
+            friends_by_lid = {}
+            
+            # Pre-populate working maps from cache
             for lid, cached in scores_data.items():
-                if lid in scenario_info:  # only keep lids that are in master
+                if lid in scenario_info:
                     if "user" in cached:
                         user_by_lid[lid] = cached["user"]
                     if "friends" in cached and cached["friends"]:
                         friends_by_lid[lid] = cached["friends"]
 
-            # Only fetch lids not already cached
+            if not self._jwt_token:
+                # Update UI with whatever we have (scenarios + cached scores) and stop
+                self._user_by_lid = user_by_lid
+                self._friends_by_lid = friends_by_lid
+                self._rebuild_data()
+                self._update_status(f"Done (Scenario list updated) — {len(master)} scenarios.")
+                self._update_progress(100, 100)
+                return
+
+            # Determine what actually needs fetching
             all_lids = list(scenario_info.keys())
             work_items = [lid for lid in all_lids if lid not in scores_data]
             total_all = len(all_lids)
             total_to_fetch = len(work_items)
             cached_count = total_all - total_to_fetch
-            logger.info("%d cached, %d to fetch (of %d total)",
-                        cached_count, total_to_fetch, total_all)
-
-            self._scenario_info = scenario_info
+            
             self._user_by_lid = user_by_lid
             self._friends_by_lid = friends_by_lid
-
-            if cached_count > 0:
-                self._update_status(
-                    f"{cached_count} cached, fetching {total_to_fetch} remaining…"
-                )
-                # Show cached data immediately
-                self._rebuild_data()
 
             if total_to_fetch == 0:
                 played, unplayed = self._rebuild_data()
@@ -1731,6 +1706,9 @@ class KovaaksApp(tk.Tk):
                 )
                 self._update_progress(100, 100)
                 return
+
+            self._update_status(f"Fetching scores for {total_to_fetch} scenarios ({cached_count} cached)…")
+            self._rebuild_data()
 
             lock = threading.Lock()
             errors = 0
@@ -1828,7 +1806,7 @@ class KovaaksApp(tk.Tk):
                     done = completed
 
                     # Save cache every 200 completions
-                    if done - last_save[0] >= 200 or done == total_to_fetch:  # noqa: E501
+                    if done - last_save[0] >= 200 or done == total_to_fetch:
                         last_save[0] = done
                         _save_cache()
 
@@ -1849,9 +1827,8 @@ class KovaaksApp(tk.Tk):
                         f"Fetching scores… {done}/{total_to_fetch} "
                         f"({cached_count} cached, {errors} errors) — ETA {eta}"
                     )
-                    # Map stage 2: starts from wherever stage 1 finished
-                    s1_actual = len(all_scenarios)
-                    prog = (s1_actual + done) / (s1_actual + total_to_fetch) if (s1_actual + total_to_fetch) > 0 else 1.0
+                    # Weighted progress: 20% for scenarios (already done), 80% for scores
+                    prog = 0.2 + (0.8 * (done / total_to_fetch))
                     self._update_progress(min(1.0, prog), 1.0)
                 # Live-refresh tabs every 100 completions
                 if done - last_refresh[0] >= 100:
