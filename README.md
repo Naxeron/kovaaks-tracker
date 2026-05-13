@@ -7,7 +7,7 @@ A vibe coded tracker for KovaaKs, primarily built for sandbox rank farming and s
 - **Scenario Browser** — View all popular scenarios (≥1,000 leaderboard entries), sorted and filterable
 - **Live Score Tracking** — Fetches your rank, score, and percentile from the KovaaKs API
 - **Friend Comparison** — See your best friend's score side-by-side with rank/percentile diffs
-- **Utility Score** — Smart practice recommendation algorithm factoring in skill gap, spaced repetition, session fatigue, plateau detection, and competition trends
+- **Potential Score** — Smart practice recommendation algorithm factoring in skill gap, spaced repetition, session fatigue, plateau detection, and competition trends
 - **Local Stats Integration** — Reads your Steam stats directory to track local run counts and score trends
 - **Auto-Update** — Polls your stats folder and refreshes scores automatically when you finish a run
 - **Autoplay Mode** — Automatically launches the next scenario in your list after completing one
@@ -41,9 +41,9 @@ python kovaaks_gui.py
 5. **Play** — Click ▶ on any row to launch the scenario in KovaaKs via Steam
 6. **Autoplay** — Enable 🔁 to auto-advance through your list after each run
 
-## How Utility Score Works
+## How Potential Score Works
 
-The Utility column ranks scenarios by practice value using:
+The Potential column ranks scenarios by practice value using:
 
 | Factor | Description |
 |---|---|

@@ -321,7 +321,7 @@ COLUMNS = [
     ("Rank Diff", 80),
     ("Pctile Diff", 80),
     ("Local Runs", 80),
-    ("Utility", 70),
+    ("Potential", 70),
 ]
 
 # Columns to auto-hide when a specific filter is active
@@ -334,7 +334,7 @@ FILTER_HIDDEN_COLS = {
     "unplayed":     {"My Rank", "My Score", "Percentile", "Score Date",
                      "Best Friend", "Friend Rank", "Friend Score",
                      "Friend Percentile", "Friend Score Date",
-                     "Rank Diff", "Pctile Diff", "Local Runs", "Utility"},
+                     "Rank Diff", "Pctile Diff", "Local Runs", "Potential"},
 }
 
 # ---------------------------------------------------------------------------
@@ -1535,7 +1535,7 @@ class KovaaksApp(tk.Tk):
                 "New Entries / Day": f"{popularity_trend:.1f}" if popularity_trend > 0 else "0.0",
                 "Trend Mult": f"{competition_multiplier:.2f}x",
                 "Local Runs": str(lstats["count"]),
-                "Utility": "",
+                "Potential": "",
             }
 
             if has_user or has_friends:
@@ -1565,7 +1565,7 @@ class KovaaksApp(tk.Tk):
                         pct = (1 - rank / entries) * 100
                         row["Percentile"] = f"{pct:.2f}%"
 
-                        # Calculate Utility Score (Optimized Algorithm)
+                        # Calculate Potential Score (Optimized Algorithm)
                         # 1. Logarithmic Potential — neutralizes population bias
                         skill_gap = 1.0 - pct / 100.0
                         log_weight = math.log10(max(rank, 10))
@@ -1594,9 +1594,9 @@ class KovaaksApp(tk.Tk):
                         # 5. Active Learning Bonus — clamped trend factor
                         trend_factor = max(0.8, min(trend, 1.3))
 
-                        # 6. Final Utility — *1000 converts small log floats to readable ints
-                        utility = (base_potential * 1000) * time_factor * fatigue_factor * plateau_penalty * trend_factor * competition_multiplier
-                        row["Utility"] = f"{int(utility)}"
+                        # 6. Final Potential — *1000 converts small log floats to readable ints
+                        potential = (base_potential * 1000) * time_factor * fatigue_factor * plateau_penalty * trend_factor * competition_multiplier
+                        row["Potential"] = f"{int(potential)}"
 
                     except (ValueError, TypeError, ZeroDivisionError):
                         row["Percentile"] = ""
