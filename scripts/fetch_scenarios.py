@@ -113,10 +113,37 @@ def fetch_all_scenarios():
 
 if __name__ == "__main__":
     try:
-        scenarios = fetch_all_scenarios()
+        # Load existing scenarios if file exists
+        existing_scenarios = {}
+        if os.path.exists(SCENARIOS_JSON):
+            try:
+                with open(SCENARIOS_JSON, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    # Use leaderboardId as key for deduplication
+                    existing_scenarios = {s.get("leaderboardId"): s for s in data if s.get("leaderboardId")}
+                logger.info(f"Loaded {len(existing_scenarios)} existing scenarios from {SCENARIOS_JSON}")
+            except Exception as e:
+                logger.warning(f"Could not load existing scenarios: {e}")
+
+        # Fetch new scenarios
+        new_scenarios_list = fetch_all_scenarios()
+        
+        # Merge new into existing (new overwrites old for same leaderboardId)
+        for s in new_scenarios_list:
+            l_id = s.get("leaderboardId")
+            if l_id:
+                existing_scenarios[l_id] = s
+        
+        # Convert back to list
+        merged_list = list(existing_scenarios.values())
+        
+        # Optional: Sort by entries count descending or name
+        merged_list.sort(key=lambda x: int(x.get("counts", {}).get("entries", 0)), reverse=True)
+
         with open(SCENARIOS_JSON, "w", encoding="utf-8") as f:
-            json.dump(scenarios, f, separators=(",", ":"))
-        logger.info(f"Saved {len(scenarios)} scenarios to {SCENARIOS_JSON}")
+            json.dump(merged_list, f, separators=(",", ":"))
+        
+        logger.info(f"Merged and saved {len(merged_list)} total scenarios to {SCENARIOS_JSON}")
     except Exception as e:
         logger.error(f"Error in fetch script: {e}")
         exit(1)
