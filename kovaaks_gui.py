@@ -679,6 +679,11 @@ class KovaaksApp(tk.Tk):
         self._autoplay_current_scenario: str | None = None
         self._autoplay_btn: tk.Button | None = None
 
+        # Progress bar animation state
+        self._current_progress = 0.0
+        self._target_progress = 0.0
+        self._animating_progress = False
+
         self._apply_styles()
         self._build_ui()
         self._setup_log_redirect()
@@ -928,10 +933,15 @@ class KovaaksApp(tk.Tk):
         self._log_resize_handle.pack_forget()  # hide resize handle when collapsed
 
         # — Progress Bar (Sleek Custom) —
-        self._progress_bg = tk.Frame(self, bg=BG_DARKER, height=4)
+        self._progress_bg = tk.Frame(self, bg=BG_DARKER, height=5)
         self._progress_bg.pack(fill="x", side="bottom")
-        self._progress_fill = tk.Frame(self._progress_bg, bg=ACCENT, height=4)
+        self._progress_fill = tk.Frame(self._progress_bg, bg=ACCENT, height=5)
         self._progress_fill.place(x=0, y=0, relwidth=0.0, relheight=1.0)
+
+        # Shimmer highlight
+        self._progress_shimmer = tk.Frame(self._progress_fill, bg=ACCENT_HOVER, height=5)
+        self._progress_shimmer.place(relx=-0.5, relwidth=0.4, relheight=1.0)
+        self.after(500, self._shimmer_loop)
 
         # — Status bar —
         self._status_var = tk.StringVar(value="Ready")
@@ -1353,7 +1363,7 @@ class KovaaksApp(tk.Tk):
                 self._update_status(msg)
                 # Map stage 1 to its portion of total_est
                 prog = done / total_est if total_est > 0 else 0
-                self.after(0, lambda: self._progress_fill.place(relwidth=min(0.95, prog)))
+                self._update_progress(min(0.95, prog), 1.0)
 
             session = requests.Session()
             all_scenarios = fetch_all_scenarios(
@@ -1586,7 +1596,7 @@ class KovaaksApp(tk.Tk):
                     # Map stage 2: starts from wherever stage 1 finished
                     s1_actual = len(all_scenarios)
                     prog = (s1_actual + done) / (s1_actual + total_to_fetch) if (s1_actual + total_to_fetch) > 0 else 1.0
-                    self.after(0, lambda: self._progress_fill.place(relwidth=min(1.0, prog)))
+                    self._update_progress(min(1.0, prog), 1.0)
                 # Live-refresh tabs every 100 completions
                 if done - last_refresh[0] >= 100:
                     last_refresh[0] = done
@@ -1799,11 +1809,63 @@ class KovaaksApp(tk.Tk):
         self.after(0, lambda: self._status_var.set(msg))
 
     def _update_progress(self, current, total):
-        if total > 0:
-            val = current / total
-            self.after(0, lambda: self._progress_fill.place(relwidth=val))
+        target = (current / total) if total > 0 else 0
+        self.after(0, lambda: self._set_progress_target(target))
+
+    def _set_progress_target(self, target):
+        self._target_progress = target
+        if not self._animating_progress:
+            self._animate_progress_loop()
+
+    def _animate_progress_loop(self):
+        self._animating_progress = True
+        # Easing-out approach
+        diff = self._target_progress - self._current_progress
+        
+        if abs(diff) < 0.0001:
+            self._current_progress = self._target_progress
+            self._progress_fill.place(relwidth=self._current_progress)
+            self._animating_progress = False
+            return
+
+        # Smooth move towards target
+        step = diff * 0.12
+        if abs(step) < 0.001:
+            step = 0.001 if diff > 0 else -0.001
+            
+        if abs(step) > abs(diff):
+            self._current_progress = self._target_progress
         else:
-            self.after(0, lambda: self._progress_fill.place(relwidth=0))
+            self._current_progress += step
+            
+        self._progress_fill.place(relwidth=self._current_progress)
+        self.after(16, self._animate_progress_loop) # ~60fps
+
+    def _shimmer_loop(self):
+        # Hide shimmer when progress is complete (100%)
+        if self._current_progress >= 0.999:
+            if self._progress_shimmer.place_info():
+                self._progress_shimmer.place_forget()
+            self.after(200, self._shimmer_loop)
+            return
+
+        # Move shimmer from left to right
+        try:
+            curr_info = self._progress_shimmer.place_info()
+            if not curr_info:
+                # Re-show if it was hidden
+                self._progress_shimmer.place(relx=-0.5, relwidth=0.4, relheight=1.0)
+                curr_x = -0.5
+            else:
+                curr_x = float(curr_info.get('relx', -0.5))
+            
+            new_x = curr_x + 0.012
+            if new_x > 1.2:
+                new_x = -0.5
+            self._progress_shimmer.place(relx=new_x)
+        except Exception:
+            pass
+        self.after(25, self._shimmer_loop)
 
     # -------------------------------------------------------------------
     # Column visibility
