@@ -642,31 +642,36 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(self, text="Auto Refresh", style="Dark.TLabel").grid(
             row=row, column=0, sticky="w", **pad)
         self._auto_refresh_var = tk.BooleanVar(value=cfg.get("auto_refresh", False))
-        cb = tk.Checkbutton(self, variable=self._auto_refresh_var, bg=BG, activebackground=BG,
+        self._auto_refresh_cb = tk.Checkbutton(self, variable=self._auto_refresh_var, bg=BG, activebackground=BG,
                             selectcolor=BG, bd=0, highlightthickness=0,
                             fg="white", activeforeground="white")
-        cb.grid(row=row, column=1, sticky="w", padx=12)
+        self._auto_refresh_cb.grid(row=row, column=1, sticky="w", padx=12)
         row += 1
 
-        # Auto Refresh GitHub Only
-        ttk.Label(self, text="Only if GitHub updated", style="Dark.TLabel").grid(
-            row=row, column=0, sticky="w", **pad)
+        # Wait for scenario data update
+        self._github_label = ttk.Label(self, text="Wait for scenario data update", style="Dark.TLabel")
+        self._github_label.grid(row=row, column=0, sticky="w", **pad)
         self._auto_refresh_github_var = tk.BooleanVar(value=cfg.get("auto_refresh_github_only", False))
-        cb2 = tk.Checkbutton(self, variable=self._auto_refresh_github_var, bg=BG, activebackground=BG,
+        self._auto_refresh_github_cb = tk.Checkbutton(self, variable=self._auto_refresh_github_var, bg=BG, activebackground=BG,
                              selectcolor=BG, bd=0, highlightthickness=0,
                              fg="white", activeforeground="white")
-        cb2.grid(row=row, column=1, sticky="w", padx=12)
+        self._auto_refresh_github_cb.grid(row=row, column=1, sticky="w", padx=12)
         row += 1
 
         # Refresh Interval
-        ttk.Label(self, text="Refresh Interval (min)", style="Dark.TLabel").grid(
-            row=row, column=0, sticky="w", **pad)
+        self._interval_label = ttk.Label(self, text="Refresh Interval (min)", style="Dark.TLabel")
+        self._interval_label.grid(row=row, column=0, sticky="w", **pad)
         self._refresh_interval_var = tk.StringVar(value=cfg.get("refresh_interval", "60"))
-        entry = tk.Entry(self, textvariable=self._refresh_interval_var, width=15,
+        self._refresh_interval_entry = tk.Entry(self, textvariable=self._refresh_interval_var, width=15,
                          bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
                          font=("Segoe UI", 11), relief="flat", bd=4)
-        entry.grid(row=row, column=1, sticky="w", **pad)
+        self._refresh_interval_entry.grid(row=row, column=1, sticky="w", **pad)
         row += 1
+
+        # Traces for UI interactivity
+        self._auto_refresh_var.trace_add("write", self._update_ui_states)
+        self._auto_refresh_github_var.trace_add("write", self._update_ui_states)
+        self._update_ui_states()
 
         if "min_entries" in self._entries:
             self._update_estimate()
@@ -690,6 +695,26 @@ class SettingsDialog(tk.Toplevel):
         x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
         y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{x}+{y}")
+
+    def _update_ui_states(self, *_args):
+        refresh_on = self._auto_refresh_var.get()
+        github_only = self._auto_refresh_github_var.get()
+        
+        # GitHub only toggle is only relevant if auto refresh is ON
+        if refresh_on:
+            self._auto_refresh_github_cb.config(state="normal")
+            self._github_label.config(foreground=TEXT)
+        else:
+            self._auto_refresh_github_cb.config(state="disabled")
+            self._github_label.config(foreground=TEXT_DIM)
+            
+        # Interval entry is only relevant if auto refresh is ON AND github only is OFF
+        if refresh_on and not github_only:
+            self._refresh_interval_entry.config(state="normal")
+            self._interval_label.config(foreground=TEXT)
+        else:
+            self._refresh_interval_entry.config(state="disabled")
+            self._interval_label.config(foreground=TEXT_DIM)
 
     def _on_save(self):
         self.result = {k: v.get().strip() for k, v in self._entries.items()}
@@ -782,10 +807,13 @@ class KovaaksApp(tk.Tk):
         # Load cache and populate view immediately
         self._load_cache_and_populate()
 
-        # Authentication on startup (delayed until needed)
+        # Authentication on startup
         self._password = None
         if not self._cfg.get("username"):
             self.after(300, self._on_settings)
+        else:
+            # Prompt for password if username is configured, so background sync is ready
+            self.after(500, self._get_password)
 
         self._start_stats_polling()
         logger.info("Application started")
@@ -890,10 +918,14 @@ class KovaaksApp(tk.Tk):
             return
 
         interval_min = 60
-        try:
-            interval_min = int(self._cfg.get("refresh_interval", "60"))
-        except ValueError:
-            pass
+        if self._cfg.get("auto_refresh_github_only", False):
+            # If waiting for github data update, check every minute
+            interval_min = 1
+        else:
+            try:
+                interval_min = int(self._cfg.get("refresh_interval", "60"))
+            except ValueError:
+                pass
         if interval_min < 1: interval_min = 1
         
         self._auto_refresh_id = self.after(interval_min * 60000, self._auto_refresh_step)
@@ -2263,6 +2295,9 @@ class KovaaksApp(tk.Tk):
                             lids_to_update[lid] = -999999.0
                         break
 
+        # Trigger UI refresh immediately to show new "Local Runs" counts
+        self.after(0, self._rebuild_data)
+
         # Autoplay: advance immediately on local score detection (before API calls)
         if self._autoplay_var.get() and self._autoplay_current_scenario:
             if snames & {self._autoplay_current_scenario}:
@@ -2277,15 +2312,20 @@ class KovaaksApp(tk.Tk):
         # Give client a few seconds to upload the stats first
         time.sleep(3)
             
+        username = self._cfg.get("username", "").strip()
+        password = self._password
+            
         if not self._jwt_token:
-            username = self._cfg.get("username", "").strip()
-            password = self._password
             if not username or not password:
+                logger.info("Auto-sync: Local run detected, but cannot fetch API scores (not logged in).")
+                # Still rebuild to show the local run increment
+                self.after(0, self._rebuild_data)
                 return
             try:
                 self._jwt_token = kovaaks_login(username, password)
             except Exception as e:
                 logger.debug("Failed silent login during stats poll: %s", e)
+                self.after(0, self._rebuild_data)
                 return
                 
         updated = False
@@ -2300,8 +2340,10 @@ class KovaaksApp(tk.Tk):
                     user_entry = None
                     username = self._cfg.get("username", "").strip()
                     
+                    all_names = []
                     for entry in data:
                         name = entry.get("webappUsername") or entry.get("steamAccountName", "")
+                        all_names.append(name)
                         if name.lower() == username.lower():
                             epoch = entry.get("attributes", {}).get("epoch", "")
                             score_date = ""
@@ -2330,6 +2372,10 @@ class KovaaksApp(tk.Tk):
                                 "date": f_date,
                             })
                     
+                    if not user_entry and data:
+                        logger.debug("Auto-sync: User '%s' not found in leaderboard data for lid=%s. Candidates: %s", 
+                                     username, lid, all_names[:5])
+                    
                     target_met = True
                     if user_entry and expected_score > -999999.0:
                         try:
@@ -2339,7 +2385,8 @@ class KovaaksApp(tk.Tk):
                                 clean_score = clean_score[:-1]
                             api_score = float(clean_score)
                             
-                            if api_score < expected_score:
+                            # Use a small epsilon to avoid precision issues
+                            if api_score < expected_score - 0.001:
                                 target_met = False
                         except (ValueError, TypeError):
                             pass
@@ -2347,9 +2394,12 @@ class KovaaksApp(tk.Tk):
                     if target_met or attempt == max_attempts - 1:
                         if user_entry:
                             self._user_by_lid[lid] = user_entry
+                            updated = True
+                            logger.info("Auto-updated score for '%s' (lid=%s)", username, lid)
                         if friend_entries:
                             self._friends_by_lid[lid] = friend_entries
                             
+                        # Update cache structure
                         if lid not in self._scores_cache.setdefault("scores", {}):
                             self._scores_cache["scores"][lid] = {}
                         if user_entry:
@@ -2357,14 +2407,23 @@ class KovaaksApp(tk.Tk):
                         if friend_entries:
                             self._scores_cache["scores"][lid]["friends"] = friend_entries
                             
-                        updated = True
-                        logger.info("Auto-updated scores for scenario lid=%s", lid)
                         break
                     else:
                         logger.debug("Score for lid=%s not updated yet in API, retrying (%d/%d)...", lid, attempt+1, max_attempts)
                         time.sleep(4)
                 except Exception as e:
-                    logger.debug("Failed auto-update for lid=%s on attempt %d: %s", lid, attempt+1, e)
+                    if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 401:
+                        logger.warning("Session expired during auto-update. Attempting re-login.")
+                        self._jwt_token = None
+                        if username and password:
+                            try:
+                                self._jwt_token = kovaaks_login(username, password)
+                                # Token refreshed, try the same attempt again immediately
+                                continue 
+                            except Exception as le:
+                                logger.debug("Re-login failed during auto-update: %s", le)
+                    
+                    logger.debug("Failed auto-update for lid=%s on attempt %d/%d: %s", lid, attempt+1, max_attempts, e)
                     time.sleep(4)
                 
         if updated:
@@ -2373,7 +2432,9 @@ class KovaaksApp(tk.Tk):
                     json.dump(self._scores_cache, f, separators=(",", ":"))
             except OSError:
                 pass
-            self.after(0, self._rebuild_data)
+        
+        # Always rebuild at the end to ensure UI is in sync even if API fetch failed
+        self.after(0, self._rebuild_data)
 
     # -------------------------------------------------------------------
     # Autoplay
