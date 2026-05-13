@@ -5,12 +5,15 @@ import time
 import concurrent.futures
 import logging
 import os
+import gzip
+import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("fetch_scenarios")
 
 SCENARIOS_JSON = "scenarios.json"
+SCENARIOS_HISTORY_JSON = "scenarios_history.json.gz"
 
 def _api_request_with_retry(method, url, timeout=30, max_retries=5, session=None, **kwargs):
     req_func = getattr(session, method.lower()) if session else getattr(requests, method.lower())
@@ -156,6 +159,51 @@ if __name__ == "__main__":
             json.dump(cleaned_list, f, separators=(",", ":"))
         
         logger.info(f"Merged and saved {len(cleaned_list)} total scenarios to {SCENARIOS_JSON}")
+
+        # --- History Tracking ---
+        history_data = {"timestamps": [], "history": {}}
+        if os.path.exists(SCENARIOS_HISTORY_JSON):
+            try:
+                with gzip.open(SCENARIOS_HISTORY_JSON, "rt", encoding="utf-8") as f:
+                    history_data = json.load(f)
+                logger.info(f"Loaded history with {len(history_data.get('timestamps', []))} timestamps")
+            except Exception as e:
+                logger.warning(f"Could not load history: {e}")
+
+        # Add current timestamp
+        now_str = datetime.datetime.now().isoformat()
+        history_data["timestamps"].append(now_str)
+        
+        # Update history for all cleaned scenarios
+        current_history = history_data["history"]
+        for s in cleaned_list:
+            lid = s["leaderboardId"]
+            entries = s["counts"]["entries"]
+            if lid not in current_history:
+                # Initialize with nulls for past timestamps to keep alignment
+                current_history[lid] = [None] * (len(history_data["timestamps"]) - 1)
+            current_history[lid].append(entries)
+
+        # Ensure all existing LIDs also get a value (None if not in current fetch)
+        for lid, counts in current_history.items():
+            if len(counts) < len(history_data["timestamps"]):
+                counts.append(None)
+
+        # Prune to last 48 records
+        MAX_HISTORY = 48
+        if len(history_data["timestamps"]) > MAX_HISTORY:
+            history_data["timestamps"] = history_data["timestamps"][-MAX_HISTORY:]
+            for lid in current_history:
+                current_history[lid] = current_history[lid][-MAX_HISTORY:]
+
+        # Save compressed history
+        try:
+            with gzip.open(SCENARIOS_HISTORY_JSON, "wt", encoding="utf-8") as f:
+                json.dump(history_data, f, separators=(",", ":"))
+            logger.info(f"Saved compressed history to {SCENARIOS_HISTORY_JSON}")
+        except Exception as e:
+            logger.error(f"Failed to save history: {e}")
+
     except Exception as e:
         logger.error(f"Error in fetch script: {e}")
         exit(1)
