@@ -2,7 +2,7 @@
 """
 KovaaKs Scenario Tracker — Dark-themed GUI
 Two tabs: Played (user + friends) and Unplayed.
-Only considers scenarios with >1000 leaderboard entries.
+Only considers scenarios with customizable minimum leaderboard entries (default 1000).
 """
 
 import tkinter as tk
@@ -466,6 +466,7 @@ class SettingsDialog(tk.Toplevel):
             ("KovaaKs Username", "username", cfg.get("username", "")),
             ("KovaaKs Password", "password", cfg.get("password", "")),
             ("Stats Folder", "stats_dir", cfg.get("stats_dir", get_default_stats_dir())),
+            ("Min Entries for Fetching", "min_entries", cfg.get("min_entries", "1000")),
         ]
         self._entries = {}
 
@@ -1215,14 +1216,16 @@ class KovaaksApp(tk.Tk):
                 return
             logger.debug("JWT token obtained (length=%d)", len(self._jwt_token))
 
-            # ── Step 2: Fetch all scenarios (>1000 entries) ──
+            # ── Step 2: Fetch all scenarios (>1000 entries by default) ──
             self._update_status("Fetching all scenarios (accurate counts)…")
 
             # Reuse cache loaded at startup
             scores_cache = self._scores_cache
 
+            min_entries_threshold = int(self._cfg.get("min_entries", MIN_ENTRIES))
+
             session = requests.Session()
-            all_scenarios = fetch_all_scenarios(min_entries=MIN_ENTRIES, session=session)
+            all_scenarios = fetch_all_scenarios(min_entries=min_entries_threshold, session=session)
             logger.info("API returned %d total scenarios", len(all_scenarios))
 
             # Save scenarios to cache
@@ -1234,7 +1237,7 @@ class KovaaksApp(tk.Tk):
             except OSError as e:
                 logger.warning("Could not save cache: %s", e)
 
-            # Filter to >1000 entries
+            # Filter to min_entries_threshold
             master = []
             for s in all_scenarios:
                 entries = s.get("counts", {}).get("entries", 0)
@@ -1242,11 +1245,11 @@ class KovaaksApp(tk.Tk):
                     entries = int(entries)
                 except (ValueError, TypeError):
                     entries = 0
-                if entries >= MIN_ENTRIES:
+                if entries >= min_entries_threshold:
                     master.append(s)
 
-            logger.info("Filtered to %d scenarios with >=%d entries", len(master), MIN_ENTRIES)
-            self._update_status(f"{len(master)} scenarios with ≥{MIN_ENTRIES} entries.")
+            logger.info("Filtered to %d scenarios with >=%d entries", len(master), min_entries_threshold)
+            self._update_status(f"{len(master)} scenarios with ≥{min_entries_threshold} entries.")
 
             now_str = datetime.datetime.now().isoformat()
             history = scores_cache.get("entry_history", {})
