@@ -47,6 +47,11 @@ def fetch_all_scenarios():
     page = 0
     session = requests.Session()
     
+    # Increase connection pool size to match max_workers in ThreadPoolExecutor
+    adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    
     # We fetch a large number to ensure we cover what most users want.
     # ~18,000 scenarios in total. We'll fetch until the API gives no more data.
     # or until entry counts are very low. 
