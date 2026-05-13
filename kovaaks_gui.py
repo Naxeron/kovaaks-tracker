@@ -645,12 +645,7 @@ class KovaaksApp(tk.Tk):
         ctrl.pack(side="right")
 
         # Autoplay toggle button
-        self._autoplay_btn = tk.Button(
-            ctrl, text="🔁 Autoplay",
-            bg=BG_LIGHTER, fg=TEXT_DIM, activebackground=GREEN,
-            activeforeground="#fff", font=("Segoe UI", 9, "bold"),
-            relief="flat", bd=0, padx=10, pady=4, cursor="hand2",
-            command=self._toggle_autoplay)
+        self._autoplay_btn = self._make_button(ctrl, "🔁 Autoplay", self._toggle_autoplay)
         self._autoplay_btn.pack(side="left", padx=4)
 
         self._btn_refresh = self._make_button(ctrl, "⟳ Refresh", self._on_fetch_all)
@@ -1966,9 +1961,11 @@ class KovaaksApp(tk.Tk):
             else:
                 self._update_status("Autoplay ON — select or play a scenario to begin")
         else:
-            self._autoplay_btn.configure(bg=BG_LIGHTER, fg=TEXT_DIM)
-            self._autoplay_btn.unbind("<Enter>")
-            self._autoplay_btn.unbind("<Leave>")
+            self._autoplay_btn.configure(bg=ACCENT, fg="#fff")
+            self._autoplay_btn.bind("<Enter>",
+                lambda e: self._autoplay_btn.configure(bg=ACCENT_HOVER))
+            self._autoplay_btn.bind("<Leave>",
+                lambda e: self._autoplay_btn.configure(bg=ACCENT))
             self._autoplay_current_scenario = None
             self._update_status("Autoplay OFF")
 
@@ -2001,9 +1998,11 @@ class KovaaksApp(tk.Tk):
         if next_idx >= len(children):
             # Reached end of list
             self._autoplay_var.set(False)
-            self._autoplay_btn.configure(bg=BG_LIGHTER, fg=TEXT_DIM)
-            self._autoplay_btn.unbind("<Enter>")
-            self._autoplay_btn.unbind("<Leave>")
+            self._autoplay_btn.configure(bg=ACCENT, fg="#fff")
+            self._autoplay_btn.bind("<Enter>",
+                lambda e: self._autoplay_btn.configure(bg=ACCENT_HOVER))
+            self._autoplay_btn.bind("<Leave>",
+                lambda e: self._autoplay_btn.configure(bg=ACCENT))
             self._autoplay_current_scenario = None
             self._update_status("Autoplay: reached end of list, autoplay disabled")
             return
