@@ -648,6 +648,16 @@ class SettingsDialog(tk.Toplevel):
         cb.grid(row=row, column=1, sticky="w", padx=12)
         row += 1
 
+        # Auto Refresh GitHub Only
+        ttk.Label(self, text="Only if GitHub updated", style="Dark.TLabel").grid(
+            row=row, column=0, sticky="w", **pad)
+        self._auto_refresh_github_var = tk.BooleanVar(value=cfg.get("auto_refresh_github_only", False))
+        cb2 = tk.Checkbutton(self, variable=self._auto_refresh_github_var, bg=BG, activebackground=BG,
+                             selectcolor=BG, bd=0, highlightthickness=0,
+                             fg="white", activeforeground="white")
+        cb2.grid(row=row, column=1, sticky="w", padx=12)
+        row += 1
+
         # Refresh Interval
         ttk.Label(self, text="Refresh Interval (min)", style="Dark.TLabel").grid(
             row=row, column=0, sticky="w", **pad)
@@ -684,6 +694,7 @@ class SettingsDialog(tk.Toplevel):
     def _on_save(self):
         self.result = {k: v.get().strip() for k, v in self._entries.items()}
         self.result["auto_refresh"] = self._auto_refresh_var.get()
+        self.result["auto_refresh_github_only"] = self._auto_refresh_github_var.get()
         self.result["refresh_interval"] = self._refresh_interval_var.get().strip()
         self.destroy()
 
@@ -815,8 +826,59 @@ class KovaaksApp(tk.Tk):
             return self._password
         return None
 
+    def _check_github_updates(self):
+        """Lightweight check to see if GitHub files have changed via ETags/Last-Modified."""
+        urls = [
+            "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios.json",
+            "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios_history.json.gz"
+        ]
+        
+        last_etags = self._cfg.get("last_etags", {})
+        any_changed = False
+        new_etags = last_etags.copy()
+        
+        try:
+            for url in urls:
+                key = url.split("/")[-1]
+                logger.debug("Checking GitHub update for %s...", key)
+                # Use HEAD request to check headers only
+                resp = requests.head(url, timeout=10)
+                if resp.status_code == 200:
+                    etag = resp.headers.get("ETag")
+                    last_modified = resp.headers.get("Last-Modified")
+                    
+                    # Store both ETag and Last-Modified for robustness
+                    current_marker = etag or last_modified
+                    
+                    if current_marker != last_etags.get(key):
+                        logger.info("Update detected for %s: %s -> %s", key, last_etags.get(key), current_marker)
+                        any_changed = True
+                        new_etags[key] = current_marker
+                    else:
+                        logger.debug("%s is up to date (%s)", key, current_marker)
+                else:
+                    logger.warning("GitHub HEAD request failed for %s: %d", url, resp.status_code)
+                    # If we can't check, assume it might have changed to be safe
+                    any_changed = True
+        except Exception as e:
+            logger.warning("Error checking for GitHub updates: %s", e)
+            return True # Assume changed on error
+            
+        if any_changed:
+            self._cfg["last_etags"] = new_etags
+            
+        return any_changed
+
     def _auto_refresh_step(self):
         if self._cfg.get("auto_refresh", False) and not self._running:
+            if self._cfg.get("auto_refresh_github_only", False):
+                self._update_status("Checking for GitHub updates...")
+                if not self._check_github_updates():
+                    logger.info("Auto-refresh skipped: No updates on GitHub.")
+                    self._update_status("Ready (GitHub up-to-date)")
+                    self._schedule_next_auto_refresh()
+                    return
+
             username = self._cfg.get("username", "").strip()
             password = self._password
             if username and password:
@@ -824,6 +886,9 @@ class KovaaksApp(tk.Tk):
                 self._set_running(True, "Auto-refreshing…")
                 threading.Thread(target=self._do_fetch_all, args=(username, password), daemon=True).start()
         
+        self._schedule_next_auto_refresh()
+
+    def _schedule_next_auto_refresh(self):
         # Reschedule
         interval_min = 60
         try:
@@ -831,6 +896,9 @@ class KovaaksApp(tk.Tk):
         except ValueError:
             pass
         if interval_min < 1: interval_min = 1
+        
+        if self._auto_refresh_id:
+            self.after_cancel(self._auto_refresh_id)
         self._auto_refresh_id = self.after(interval_min * 60000, self._auto_refresh_step)
 
     # -------------------------------------------------------------------
@@ -1483,6 +1551,12 @@ class KovaaksApp(tk.Tk):
                 resp = requests.get(repo_url, timeout=30)
                 logger.info("GitHub response status: %d", resp.status_code)
                 if resp.status_code == 200:
+                    # Update ETags in config
+                    etag = resp.headers.get("ETag") or resp.headers.get("Last-Modified")
+                    if etag:
+                        if "last_etags" not in self._cfg: self._cfg["last_etags"] = {}
+                        self._cfg["last_etags"]["scenarios.json"] = etag
+
                     try:
                         all_scenarios = resp.json()
                         logger.info("Successfully fetched %d scenarios from GitHub", len(all_scenarios))
@@ -1500,6 +1574,12 @@ class KovaaksApp(tk.Tk):
                 logger.info("Attempting to fetch history from GitHub: %s", history_url)
                 resp = requests.get(history_url, timeout=30)
                 if resp.status_code == 200:
+                    # Update ETags in config
+                    etag = resp.headers.get("ETag") or resp.headers.get("Last-Modified")
+                    if etag:
+                        if "last_etags" not in self._cfg: self._cfg["last_etags"] = {}
+                        self._cfg["last_etags"]["scenarios_history.json.gz"] = etag
+
                     try:
                         # Decompress Gzip history
                         with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as f:
