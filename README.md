@@ -2,9 +2,13 @@
 
 A vibe coded tracker for KovaaKs, primarily built for sandbox rank farming and sniping friend scores.
 
+## Issues and contributions
+
+I may be slow to respond to issues and contributions, depends on how I'm feeling and my Antigravity quota. Feel free to open issues regardless.
+
 ## Features
 
-- **Scenario Browser** — View all popular scenarios (≥1,000 leaderboard entries), sorted and filterable
+- **Scenario Browser** — View all popular scenarios (configurable min. leaderboard entries), sorted and filterable
 - **Live Score Tracking** — Fetches your rank, score, and percentile from the KovaaKs API
 - **Friend Comparison** — See your best friend's score side-by-side with rank/percentile diffs
 - **Potential Score** — Smart practice recommendation algorithm factoring in skill gap, spaced repetition, session fatigue, plateau detection, and competition trends
