@@ -19,6 +19,8 @@ import math
 import urllib.parse
 import webbrowser
 import concurrent.futures
+import gzip
+import io
 
 import requests
 
@@ -1491,6 +1493,44 @@ class KovaaksApp(tk.Tk):
                     logger.warning("GitHub returned non-200 status: %d", resp.status_code)
             except Exception as e:
                 logger.warning("Failed to fetch scenarios from GitHub: %s", e)
+
+            # ── Step 2b: Fetch scenario history from GitHub ──
+            history_url = "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios_history.json.gz"
+            try:
+                logger.info("Attempting to fetch history from GitHub: %s", history_url)
+                resp = requests.get(history_url, timeout=30)
+                if resp.status_code == 200:
+                    try:
+                        # Decompress Gzip history
+                        with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as f:
+                            ext_history = json.load(f)
+                        
+                        h_timestamps = ext_history.get("timestamps", [])
+                        h_data = ext_history.get("history", {})
+                        
+                        if h_timestamps and h_data:
+                            local_history = scores_cache.get("entry_history", {})
+                            merged_count = 0
+                            for lid, counts in h_data.items():
+                                if lid not in local_history:
+                                    local_history[lid] = {}
+                                
+                                # Map counts back to timestamps
+                                for i, count in enumerate(counts):
+                                    if count is not None and i < len(h_timestamps):
+                                        ts = h_timestamps[i]
+                                        if ts not in local_history[lid]:
+                                            local_history[lid][ts] = count
+                                            merged_count += 1
+                            
+                            scores_cache["entry_history"] = local_history
+                            logger.info("Merged %d history points from GitHub", merged_count)
+                    except Exception as je:
+                        logger.error("Failed to parse history.json.gz: %s", je)
+                else:
+                    logger.warning("History file not found on GitHub (status %d)", resp.status_code)
+            except Exception as e:
+                logger.warning("Failed to fetch history from GitHub: %s", e)
 
             if not all_scenarios:
                 self._update_status("Fetching all scenarios (API fallback)…")
