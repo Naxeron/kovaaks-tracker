@@ -1238,15 +1238,9 @@ class KovaaksApp(tk.Tk):
         scenario_info = {}
         for s in master:
             lid = str(s.get("leaderboardId", ""))
-            sd = s.get("scenario", s)
-            authors = sd.get("authors", [])
-            if isinstance(authors, list):
-                authors = ", ".join(authors)
             scenario_info[lid] = {
                 "name": s.get("scenarioName", ""),
                 "entries": s.get("counts", {}).get("entries", ""),
-                "description": sd.get("description", ""),
-                "authors": str(authors),
             }
 
         # Extract scores
@@ -1565,18 +1559,12 @@ class KovaaksApp(tk.Tk):
             scores_cache["entry_history"] = history
 
             # Build lid → scenario info map
-            scenario_info = {}  # lid → {name, entries, description, authors}
+            scenario_info = {}  # lid → {name, entries}
             for s in master:
                 lid = str(s.get("leaderboardId", ""))
-                sd = s.get("scenario", s)
-                authors = sd.get("authors", [])
-                if isinstance(authors, list):
-                    authors = ", ".join(authors)
                 scenario_info[lid] = {
                     "name": s.get("scenarioName", ""),
                     "entries": s.get("counts", {}).get("entries", ""),
-                    "description": sd.get("description", ""),
-                    "authors": str(authors),
                 }
 
             # ── Step 3+4: Fetch user + friends' scores together (concurrent) ──
