@@ -580,6 +580,26 @@ class SettingsDialog(tk.Toplevel):
                 
             row += 1
             
+        # Auto Refresh Toggle
+        ttk.Label(self, text="Auto Refresh", style="Dark.TLabel").grid(
+            row=row, column=0, sticky="w", **pad)
+        self._auto_refresh_var = tk.BooleanVar(value=cfg.get("auto_refresh", False))
+        cb = tk.Checkbutton(self, variable=self._auto_refresh_var, bg=BG, activebackground=BG,
+                            selectcolor=BG, bd=0, highlightthickness=0,
+                            fg="white", activeforeground="white")
+        cb.grid(row=row, column=1, sticky="w", padx=12)
+        row += 1
+
+        # Refresh Interval
+        ttk.Label(self, text="Refresh Interval (min)", style="Dark.TLabel").grid(
+            row=row, column=0, sticky="w", **pad)
+        self._refresh_interval_var = tk.StringVar(value=cfg.get("refresh_interval", "60"))
+        entry = tk.Entry(self, textvariable=self._refresh_interval_var, width=15,
+                         bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
+                         font=("Segoe UI", 11), relief="flat", bd=4)
+        entry.grid(row=row, column=1, sticky="w", **pad)
+        row += 1
+
         if "min_entries" in self._entries:
             self._update_estimate()
 
@@ -605,6 +625,8 @@ class SettingsDialog(tk.Toplevel):
 
     def _on_save(self):
         self.result = {k: v.get().strip() for k, v in self._entries.items()}
+        self.result["auto_refresh"] = self._auto_refresh_var.get()
+        self.result["refresh_interval"] = self._refresh_interval_var.get().strip()
         self.destroy()
 
     def _update_estimate(self, *_args):
@@ -702,21 +724,36 @@ class KovaaksApp(tk.Tk):
         self.bind("<Configure>", self._on_window_resize)
         
         # Schedule auto refresh
-        self.after(3600000, self._auto_refresh_step)
+        self._auto_refresh_id = None
+        interval_min = 60
+        try:
+            interval_min = int(self._cfg.get("refresh_interval", "60"))
+        except ValueError:
+            pass
+        if interval_min < 1: interval_min = 1
+        self._auto_refresh_id = self.after(interval_min * 60000, self._auto_refresh_step)
 
     def _get_stats_dir(self):
         path = self._cfg.get("stats_dir", get_default_stats_dir())
         return os.path.expanduser(path) if path else ""
 
     def _auto_refresh_step(self):
-        if not self._running:
+        if self._cfg.get("auto_refresh", False) and not self._running:
             username = self._cfg.get("username", "").strip()
             password = self._cfg.get("password", "").strip()
             if username and password:
                 self._update_status("Auto-refreshing...")
                 self._set_running(True, "Auto-refreshing…")
                 threading.Thread(target=self._do_fetch_all, args=(username, password), daemon=True).start()
-        self.after(3600000, self._auto_refresh_step)
+        
+        # Reschedule
+        interval_min = 60
+        try:
+            interval_min = int(self._cfg.get("refresh_interval", "60"))
+        except ValueError:
+            pass
+        if interval_min < 1: interval_min = 1
+        self._auto_refresh_id = self.after(interval_min * 60000, self._auto_refresh_step)
 
     # -------------------------------------------------------------------
     # Styles
@@ -1176,6 +1213,18 @@ class KovaaksApp(tk.Tk):
             self._cfg.update(dlg.result)
             save_config(self._cfg)
             self._update_status("Settings saved.")
+
+            # Update auto-refresh timer
+            if self._auto_refresh_id:
+                self.after_cancel(self._auto_refresh_id)
+            
+            interval_min = 60
+            try:
+                interval_min = int(self._cfg.get("refresh_interval", "60"))
+            except ValueError:
+                pass
+            if interval_min < 1: interval_min = 1
+            self._auto_refresh_id = self.after(interval_min * 60000, self._auto_refresh_step)
 
             new_stats_dir = self._cfg.get("stats_dir")
             if old_stats_dir != new_stats_dir:
@@ -1884,7 +1933,8 @@ class KovaaksApp(tk.Tk):
         menu = tk.Menu(self, tearoff=0, bg=BG_LIGHTER, fg=TEXT,
                        activebackground=ACCENT, activeforeground="#fff",
                        font=("Segoe UI", 9),
-                       disabledforeground=TEXT_DIM)
+                       disabledforeground=TEXT_DIM,
+                       selectcolor="white")
         for col_name, var in self._visible_cols.items():
             if col_name in auto_hidden:
                 menu.add_checkbutton(
