@@ -41,7 +41,7 @@ logger.addHandler(_console_handler)
 # ---------------------------------------------------------------------------
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH  = os.path.join(SCRIPT_DIR, "config.json")
-SCORES_CACHE = os.path.join(SCRIPT_DIR, "scores_cache.json")
+SCORES_CACHE = os.path.join(SCRIPT_DIR, "scores_cache.json.gz")
 LOG_FILE     = os.path.join(SCRIPT_DIR, "kovaaks.log")
 MIN_ENTRIES  = 1000
 
@@ -1308,7 +1308,7 @@ class KovaaksApp(tk.Tk):
         self._scores_cache = {}
         if os.path.exists(SCORES_CACHE):
             try:
-                with open(SCORES_CACHE, "r", encoding="utf-8") as f:
+                with gzip.open(SCORES_CACHE, "rt", encoding="utf-8") as f:
                     self._scores_cache = json.load(f)
                 logger.info("Loaded cache from %s", SCORES_CACHE)
             except (json.JSONDecodeError, OSError) as e:
@@ -1556,7 +1556,7 @@ class KovaaksApp(tk.Tk):
             min_entries_threshold = int(self._cfg.get("min_entries", MIN_ENTRIES))
             
             all_scenarios = None
-            repo_url = "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios.json"
+            repo_url = "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios.json.gz"
             
             try:
                 logger.info("Attempting to fetch scenarios from GitHub repo: %s", repo_url)
@@ -1568,13 +1568,14 @@ class KovaaksApp(tk.Tk):
                     etag = resp.headers.get("ETag") or resp.headers.get("Last-Modified")
                     if etag:
                         if "last_etags" not in self._cfg: self._cfg["last_etags"] = {}
-                        self._cfg["last_etags"]["scenarios.json"] = etag
+                        self._cfg["last_etags"]["scenarios.json.gz"] = etag
 
                     try:
-                        all_scenarios = resp.json()
+                        with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as f:
+                            all_scenarios = json.load(f)
                         logger.info("Successfully fetched %d scenarios from GitHub", len(all_scenarios))
-                    except json.JSONDecodeError as je:
-                        logger.error("Failed to decode scenarios.json: %s", je)
+                    except (json.JSONDecodeError, OSError) as je:
+                        logger.error("Failed to decode scenarios.json.gz: %s", je)
                 else:
                     logger.warning("GitHub returned non-200 status: %d", resp.status_code)
             except Exception as e:
@@ -1643,7 +1644,7 @@ class KovaaksApp(tk.Tk):
 
             # SAVE CACHE IMMEDIATELY after public data is fetched
             try:
-                with open(SCORES_CACHE, "w", encoding="utf-8") as f:
+                with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
                     json.dump(scores_cache, f, separators=(",", ":"))
                 logger.info("Saved GitHub/API scenarios and history to local cache")
             except OSError as e:
@@ -1759,7 +1760,7 @@ class KovaaksApp(tk.Tk):
                         "scores": scores_data,
                         "entry_history": scores_cache.get("entry_history", {}),
                     }
-                    with open(SCORES_CACHE, "w", encoding="utf-8") as f:
+                    with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
                         json.dump(unified, f, separators=(",", ":"))
                 except OSError as e:
                     logger.debug("Cache save error: %s", e)
@@ -2428,7 +2429,7 @@ class KovaaksApp(tk.Tk):
                 
         if updated:
             try:
-                with open(SCORES_CACHE, "w", encoding="utf-8") as f:
+                with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
                     json.dump(self._scores_cache, f, separators=(",", ":"))
             except OSError:
                 pass
