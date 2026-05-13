@@ -42,7 +42,12 @@ CONFIG_PATH  = os.path.join(SCRIPT_DIR, "config.json")
 SCORES_CACHE = os.path.join(SCRIPT_DIR, "scores_cache.json")
 LOG_FILE     = os.path.join(SCRIPT_DIR, "kovaaks.log")
 MIN_ENTRIES  = 1000
-STATS_DIR    = os.path.expanduser("~/.local/share/Steam/steamapps/common/FPSAimTrainer/FPSAimTrainer/stats/")
+
+def get_default_stats_dir():
+    if sys.platform == "win32":
+        return r"C:\Program Files (x86)\Steam\steamapps\common\FPSAimTrainer\FPSAimTrainer\stats"
+    else:
+        return os.path.expanduser("~/.local/share/Steam/steamapps/common/FPSAimTrainer/FPSAimTrainer/stats/")
 
 # Session-based log trimming: keep at most 2 previous launches
 _LAUNCH_MARKER = "=" * 60 + " LAUNCH " + "=" * 60
@@ -120,16 +125,16 @@ def _get_accurate_entry_count(leaderboard_id, session=None):
     return None
 
 
-def _get_local_stats():
+def _get_local_stats(stats_dir):
     """Extract local scenario stats (counts, recency, trends) from the Steam stats directory."""
     stats = {}
-    if not os.path.exists(STATS_DIR):
-        logger.warning("Stats directory not found: %s", STATS_DIR)
+    if not os.path.exists(stats_dir):
+        logger.warning("Stats directory not found: %s", stats_dir)
         return stats
 
     try:
         now_dt = datetime.datetime.now()
-        filenames = os.listdir(STATS_DIR)
+        filenames = os.listdir(stats_dir)
         # Sort filenames by date (descending) so we process most recent first
         # Pattern: ... - 2026.01.11-15.13.08 Stats.csv
         # We can just sort the strings since they are in YYYY.MM.DD format at the end
@@ -160,7 +165,7 @@ def _get_local_stats():
                     
                     # Store most recent scores for trend (already sorted by filenames.sort)
                     if len(stats[sname]["recent_scores"]) < 10:
-                        fpath = os.path.join(STATS_DIR, fname)
+                        fpath = os.path.join(stats_dir, fname)
                         try:
                             with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
                                 for line in f:
@@ -460,6 +465,7 @@ class SettingsDialog(tk.Toplevel):
         fields = [
             ("KovaaKs Username", "username", cfg.get("username", "")),
             ("KovaaKs Password", "password", cfg.get("password", "")),
+            ("Stats Folder", "stats_dir", cfg.get("stats_dir", get_default_stats_dir())),
         ]
         self._entries = {}
 
@@ -573,6 +579,10 @@ class KovaaksApp(tk.Tk):
         
         # Schedule auto refresh
         self.after(3600000, self._auto_refresh_step)
+
+    def _get_stats_dir(self):
+        path = self._cfg.get("stats_dir", get_default_stats_dir())
+        return os.path.expanduser(path) if path else ""
 
     def _auto_refresh_step(self):
         if not self._running:
@@ -1028,12 +1038,26 @@ class KovaaksApp(tk.Tk):
     # Settings
     # -------------------------------------------------------------------
     def _on_settings(self):
+        old_stats_dir = self._cfg.get("stats_dir")
         dlg = SettingsDialog(self, self._cfg)
         self.wait_window(dlg)
         if dlg.result:
             self._cfg.update(dlg.result)
             save_config(self._cfg)
             self._update_status("Settings saved.")
+
+            new_stats_dir = self._cfg.get("stats_dir")
+            if old_stats_dir != new_stats_dir:
+                self._known_stat_files.clear()
+                stats_dir = self._get_stats_dir()
+                if os.path.exists(stats_dir):
+                    try:
+                        for f in os.listdir(stats_dir):
+                            if f.endswith(" Stats.csv"):
+                                self._known_stat_files.add(f)
+                    except OSError:
+                        pass
+                self._rebuild_data()
 
     # -------------------------------------------------------------------
     # Data display
@@ -1464,7 +1488,8 @@ class KovaaksApp(tk.Tk):
         played = 0
         unplayed = 0
 
-        local_stats = _get_local_stats()
+        stats_dir = self._get_stats_dir()
+        local_stats = _get_local_stats(stats_dir)
         now = datetime.datetime.now()
         entry_history = self._scores_cache.get("entry_history", {})
 
@@ -1737,10 +1762,11 @@ class KovaaksApp(tk.Tk):
     # Auto-update polling
     # -------------------------------------------------------------------
     def _start_stats_polling(self):
-        if not os.path.exists(STATS_DIR):
+        stats_dir = self._get_stats_dir()
+        if not os.path.exists(stats_dir):
             return
         try:
-            for f in os.listdir(STATS_DIR):
+            for f in os.listdir(stats_dir):
                 if f.endswith(" Stats.csv"):
                     self._known_stat_files.add(f)
         except OSError:
@@ -1748,17 +1774,18 @@ class KovaaksApp(tk.Tk):
         self._poll_stats_folder()
 
     def _poll_stats_folder(self):
+        stats_dir = self._get_stats_dir()
         try:
-            current_files = set(f for f in os.listdir(STATS_DIR) if f.endswith(" Stats.csv"))
+            current_files = set(f for f in os.listdir(stats_dir) if f.endswith(" Stats.csv"))
             new_files = current_files - self._known_stat_files
             if new_files:
                 self._known_stat_files.update(new_files)
-                threading.Thread(target=self._handle_new_stats_files, args=(new_files,), daemon=True).start()
+                threading.Thread(target=self._handle_new_stats_files, args=(stats_dir, new_files,), daemon=True).start()
         except OSError:
             pass
         self._poll_stats_id = self.after(5000, self._poll_stats_folder)
         
-    def _handle_new_stats_files(self, new_files):
+    def _handle_new_stats_files(self, stats_dir, new_files):
         snames = set()
         lids_to_update = {}  # lid -> expected_new_score
         
@@ -1770,7 +1797,7 @@ class KovaaksApp(tk.Tk):
                 snames.add(sname)
                 
                 # Try to parse the score from this new run
-                fpath = os.path.join(STATS_DIR, fname)
+                fpath = os.path.join(stats_dir, fname)
                 score_val = None
                 try:
                     with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
