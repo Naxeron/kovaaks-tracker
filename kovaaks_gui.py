@@ -644,8 +644,14 @@ class KovaaksApp(tk.Tk):
         ctrl = tk.Frame(top_frame, bg=BG)
         ctrl.pack(side="right")
 
-        self._btn_autofit = self._make_button(ctrl, "⇔ Fit Columns", self._auto_resize_columns)
-        self._btn_autofit.pack(side="left", padx=4)
+        # Autoplay toggle button
+        self._autoplay_btn = tk.Button(
+            ctrl, text="🔁 Autoplay",
+            bg=BG_LIGHTER, fg=TEXT_DIM, activebackground=GREEN,
+            activeforeground="#fff", font=("Segoe UI", 9, "bold"),
+            relief="flat", bd=0, padx=10, pady=4, cursor="hand2",
+            command=self._toggle_autoplay)
+        self._autoplay_btn.pack(side="left", padx=4)
 
         self._btn_refresh = self._make_button(ctrl, "⟳ Refresh", self._on_fetch_all)
         self._btn_refresh.pack(side="left", padx=4)
@@ -694,14 +700,7 @@ class KovaaksApp(tk.Tk):
         # Spacer
         tk.Frame(toggle_frame, bg=BG, width=16).pack(side="left")
 
-        # Autoplay toggle button
-        self._autoplay_btn = tk.Button(
-            toggle_frame, text="🔁 Autoplay",
-            bg=BG_LIGHTER, fg=TEXT_DIM, activebackground=GREEN,
-            activeforeground="#fff", font=("Segoe UI", 9, "bold"),
-            relief="flat", bd=0, padx=10, pady=4, cursor="hand2",
-            command=self._toggle_autoplay)
-        self._autoplay_btn.pack(side="left", padx=(0, 6), pady=(0, 6))
+
 
         # Treeview + scrollbars (grid layout so vsb is never clipped)
         tree_frame = tk.Frame(content, bg=BG)
