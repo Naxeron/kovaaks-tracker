@@ -41,7 +41,7 @@ def _get_accurate_entry_count(leaderboard_id, session=None):
         logger.debug(f"Failed to fetch accurate count for lid={leaderboard_id}: {e}")
     return None
 
-def fetch_all_scenarios():
+def fetch_all_scenarios(pages_limit=0, entries_limit=100):
     url = "https://kovaaks.com/webapp-backend/scenario/popular"
     all_data = []
     page = 0
@@ -52,14 +52,11 @@ def fetch_all_scenarios():
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     
-    # We fetch a large number to ensure we cover what most users want.
-    # ~18,000 scenarios in total. We'll fetch until the API gives no more data.
-    # or until entry counts are very low. 
-    # For GitHub Actions, we can afford to fetch most of them.
-    
-    MIN_ENTRIES_LIMIT = 10 # Only fetch scenarios with at least 10 entries to keep file size reasonable
-
     while True:
+        if pages_limit > 0 and page >= pages_limit:
+            logger.info(f"Reached page limit of {pages_limit}")
+            break
+
         logger.info(f"Fetching page {page}")
         params = {"page": page, "max": 100}
         try:
@@ -86,8 +83,6 @@ def fetch_all_scenarios():
                     if "counts" not in item:
                         item["counts"] = {}
                     item["counts"]["entries"] = accurate_count
-                    if "scenario" in item and "counts" in item["scenario"]:
-                        item["scenario"]["counts"]["entries"] = accurate_count
 
         all_data.extend(items)
         
@@ -96,8 +91,8 @@ def fetch_all_scenarios():
             (int(it.get("counts", {}).get("entries", 0)) for it in items),
             default=0,
         )
-        if max_on_page < MIN_ENTRIES_LIMIT:
-            logger.info(f"Stopping at page {page} - max entries {max_on_page} < {MIN_ENTRIES_LIMIT}")
+        if max_on_page < entries_limit:
+            logger.info(f"Stopping at page {page} - max entries {max_on_page} < {entries_limit}")
             break
 
         total = data.get("total", 0)
@@ -112,6 +107,12 @@ def fetch_all_scenarios():
     return all_data
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Fetch KovaaKs scenarios and update cache.")
+    parser.add_argument("--pages", type=int, default=0, help="Number of pages to fetch (0 for all)")
+    parser.add_argument("--min-entries", type=int, default=100, help="Stop fetching when max entries on a page falls below this")
+    args = parser.parse_args()
+
     try:
         # Load existing scenarios if file exists
         existing_scenarios = {}
@@ -126,7 +127,7 @@ if __name__ == "__main__":
                 logger.warning(f"Could not load existing scenarios: {e}")
 
         # Fetch new scenarios
-        new_scenarios_list = fetch_all_scenarios()
+        new_scenarios_list = fetch_all_scenarios(pages_limit=args.pages, entries_limit=args.min_entries)
         
         # Merge new into existing (new overwrites old for same leaderboardId)
         for s in new_scenarios_list:
@@ -134,16 +135,27 @@ if __name__ == "__main__":
             if l_id:
                 existing_scenarios[l_id] = s
         
-        # Convert back to list
+        # Convert back to list and clean up
         merged_list = list(existing_scenarios.values())
         
-        # Optional: Sort by entries count descending or name
-        merged_list.sort(key=lambda x: int(x.get("counts", {}).get("entries", 0)), reverse=True)
+        cleaned_list = []
+        for s in merged_list:
+            cleaned = {
+                "leaderboardId": s.get("leaderboardId"),
+                "scenarioName": s.get("scenarioName"),
+                "counts": {
+                    "entries": s.get("counts", {}).get("entries", 0)
+                }
+            }
+            cleaned_list.append(cleaned)
+
+        # Sort by entries count descending
+        cleaned_list.sort(key=lambda x: int(x.get("counts", {}).get("entries", 0)), reverse=True)
 
         with open(SCENARIOS_JSON, "w", encoding="utf-8") as f:
-            json.dump(merged_list, f, separators=(",", ":"))
+            json.dump(cleaned_list, f, separators=(",", ":"))
         
-        logger.info(f"Merged and saved {len(merged_list)} total scenarios to {SCENARIOS_JSON}")
+        logger.info(f"Merged and saved {len(cleaned_list)} total scenarios to {SCENARIOS_JSON}")
     except Exception as e:
         logger.error(f"Error in fetch script: {e}")
         exit(1)
