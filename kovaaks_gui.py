@@ -43,6 +43,52 @@ SCORES_CACHE = os.path.join(SCRIPT_DIR, "scores_cache.json")
 LOG_FILE     = os.path.join(SCRIPT_DIR, "kovaaks.log")
 MIN_ENTRIES  = 1000
 
+# Distribution of scenarios by entry count (actual count of scenarios with >= X entries)
+SCENARIO_DISTRIBUTION_POINTS = [
+    (0, 18000), (10, 17953), (50, 17420), (100, 13772), 
+    (500, 6639), (1000, 4852), (2000, 3458), (5000, 1960), 
+    (10000, 1162), (100000, 0)
+]
+
+# Estimated number of items to fetch from the 'popular' endpoint 
+# until the entry count drops consistently below X.
+# This curve is different because popularity != entry count.
+SCENARIO_POPULARITY_DROP_OFF_POINTS = [
+    (0, 18000), (10, 17500), (50, 15000), (100, 12000), 
+    (500, 9000), (1000, 6500), (2000, 5000), (5000, 3500), 
+    (10000, 2000), (20000, 1000), (50000, 400), (100000, 0)
+]
+
+def get_estimated_fetch_count(min_entries):
+    """Estimate how many items we need to pull from the 'popular' API 
+    before hitting the min_entries threshold.
+    """
+    m = min_entries
+    if m <= 0: return SCENARIO_POPULARITY_DROP_OFF_POINTS[0][1]
+    if m >= SCENARIO_POPULARITY_DROP_OFF_POINTS[-1][0]: return 0
+    
+    for i in range(len(SCENARIO_POPULARITY_DROP_OFF_POINTS)-1):
+        x1, y1 = SCENARIO_POPULARITY_DROP_OFF_POINTS[i]
+        x2, y2 = SCENARIO_POPULARITY_DROP_OFF_POINTS[i+1]
+        if x1 <= m <= x2:
+            ratio = (m - x1) / (x2 - x1)
+            return y1 - ratio * (y1 - y2)
+    return 0
+
+def get_estimated_matching_count(min_entries):
+    """Estimate how many scenarios will actually match the min_entries threshold."""
+    m = min_entries
+    if m <= 0: return SCENARIO_DISTRIBUTION_POINTS[0][1]
+    if m >= SCENARIO_DISTRIBUTION_POINTS[-1][0]: return 0
+    
+    for i in range(len(SCENARIO_DISTRIBUTION_POINTS)-1):
+        x1, y1 = SCENARIO_DISTRIBUTION_POINTS[i]
+        x2, y2 = SCENARIO_DISTRIBUTION_POINTS[i+1]
+        if x1 <= m <= x2:
+            ratio = (m - x1) / (x2 - x1)
+            return y1 - ratio * (y1 - y2)
+    return 0
+
 def get_default_stats_dir():
     if sys.platform == "win32":
         return r"C:\Program Files (x86)\Steam\steamapps\common\FPSAimTrainer\FPSAimTrainer\stats"
@@ -211,13 +257,33 @@ def _get_local_stats(stats_dir):
     return stats
 
 
-def fetch_all_scenarios(min_entries=0, session=None):
+def get_estimated_scenario_count(min_entries):
+    """Estimate the number of scenarios that will be fetched based on min_entries threshold."""
+    m = min_entries
+    if m <= 0: return SCENARIO_DISTRIBUTION_POINTS[0][1]
+    if m >= SCENARIO_DISTRIBUTION_POINTS[-1][0]: return 0
+    
+    for i in range(len(SCENARIO_DISTRIBUTION_POINTS)-1):
+        x1, y1 = SCENARIO_DISTRIBUTION_POINTS[i]
+        x2, y2 = SCENARIO_DISTRIBUTION_POINTS[i+1]
+        if x1 <= m <= x2:
+            ratio = (m - x1) / (x2 - x1)
+            return y1 - ratio * (y1 - y2)
+    return 0
+
+
+def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
     """Fetch scenarios from the KovaaKs API (paginated, sorted by popularity).
     Stops early when all items on a page fall below *min_entries*.
     """
     url = "https://kovaaks.com/webapp-backend/scenario/popular"
     all_data = []
     page = 0
+    
+    # Estimate total to provide better progress/ETA
+    est_total = get_estimated_fetch_count(min_entries)
+    start_time = time.time()
+
     while True:
         logger.debug("Fetching all scenarios page %d", page)
         params = {"page": page, "max": 100}
@@ -245,6 +311,21 @@ def fetch_all_scenarios(min_entries=0, session=None):
                         item["scenario"]["counts"]["entries"] = accurate_count
 
         all_data.extend(items)
+        
+        # Report progress
+        if progress_callback:
+            done = len(all_data)
+            # Calculate ETA for scenario list fetching
+            elapsed = time.time() - start_time
+            if done > 0:
+                rate = done / elapsed
+                rem_est = max(0, est_total - done)
+                eta_s = rem_est / rate
+                mins, secs = divmod(int(eta_s), 60)
+                eta_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
+                
+                status_msg = f"Fetching scenarios… {done}/{int(est_total)} — ETA {eta_str}"
+                progress_callback(done, est_total, status_msg)
 
         # Early stop: API returns by descending popularity
         if min_entries > 0:
@@ -475,13 +556,32 @@ class SettingsDialog(tk.Toplevel):
                 row=row, column=0, sticky="w", **pad)
             var = tk.StringVar(value=default)
             show_char = "*" if key == "password" else ""
-            entry = tk.Entry(self, textvariable=var, width=42,
-                             bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
-                             font=("Segoe UI", 11), relief="flat", bd=4,
-                             show=show_char)
-            entry.grid(row=row, column=1, **pad)
             self._entries[key] = var
+            
+            if key == "min_entries":
+                frame = tk.Frame(self, bg=BG)
+                frame.grid(row=row, column=1, sticky="w", **pad)
+                entry = tk.Entry(frame, textvariable=var, width=15,
+                                 bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
+                                 font=("Segoe UI", 11), relief="flat", bd=4,
+                                 show=show_char)
+                entry.pack(side="left")
+                
+                self._est_label = ttk.Label(frame, text="", style="Dark.TLabel", foreground=TEXT_DIM)
+                self._est_label.pack(side="left", padx=8)
+                
+                var.trace_add("write", self._update_estimate)
+            else:
+                entry = tk.Entry(self, textvariable=var, width=42,
+                                 bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
+                                 font=("Segoe UI", 11), relief="flat", bd=4,
+                                 show=show_char)
+                entry.grid(row=row, column=1, **pad)
+                
             row += 1
+            
+        if "min_entries" in self._entries:
+            self._update_estimate()
 
         btn_frame = tk.Frame(self, bg=BG)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=12)
@@ -506,6 +606,28 @@ class SettingsDialog(tk.Toplevel):
     def _on_save(self):
         self.result = {k: v.get().strip() for k, v in self._entries.items()}
         self.destroy()
+
+    def _update_estimate(self, *_args):
+        if not hasattr(self, "_est_label"):
+            return
+        val = self._entries["min_entries"].get().strip()
+        try:
+            m = int(val)
+        except ValueError:
+            self._est_label.config(text="")
+            return
+        
+        n_scenarios = get_estimated_matching_count(m)
+        
+        # ~0.12s total per valid scenario (fetch + score)
+        total_seconds = int(n_scenarios * 0.12)
+        if total_seconds < 60:
+            est_text = f"~{total_seconds}s ETA"
+        else:
+            mins = total_seconds // 60
+            secs = total_seconds % 60
+            est_text = f"~{mins}m {secs}s ETA"
+        self._est_label.config(text=est_text)
 
 
 # ---------------------------------------------------------------------------
@@ -778,7 +900,7 @@ class KovaaksApp(tk.Tk):
             bg=BG_DARKER, fg=TEXT_DIM, activebackground=BG_LIGHTER,
             activeforeground=TEXT, font=("Segoe UI", 8),
             relief="flat", bd=0, padx=6, pady=2, cursor="hand2")
-        clear_btn.pack(side="right", padx=4)
+        clear_btn.pack(side="right")
 
         # Log text inside a container so we can control height
         self._log_text_container = tk.Frame(self._log_frame, bg=LOG_BG)
@@ -804,6 +926,12 @@ class KovaaksApp(tk.Tk):
         # — Log toggle starts collapsed —
         self._log_toggle_btn.configure(text="▶ Log")
         self._log_resize_handle.pack_forget()  # hide resize handle when collapsed
+
+        # — Progress Bar (Sleek Custom) —
+        self._progress_bg = tk.Frame(self, bg=BG_DARKER, height=4)
+        self._progress_bg.pack(fill="x", side="bottom")
+        self._progress_fill = tk.Frame(self._progress_bg, bg=ACCENT, height=4)
+        self._progress_fill.place(x=0, y=0, relwidth=0.0, relheight=1.0)
 
         # — Status bar —
         self._status_var = tk.StringVar(value="Ready")
@@ -1025,6 +1153,7 @@ class KovaaksApp(tk.Tk):
         self._update_status(
             f"Loaded from cache — {played} played, {unplayed} unplayed"
         )
+        self._update_progress(1, 1)
 
     # -------------------------------------------------------------------
     # Settings
@@ -1214,9 +1343,24 @@ class KovaaksApp(tk.Tk):
             scores_cache = self._scores_cache
 
             min_entries_threshold = int(self._cfg.get("min_entries", MIN_ENTRIES))
+            
+            # Estimates for the two stages
+            est_s1 = get_estimated_fetch_count(min_entries_threshold)
+            est_s2 = get_estimated_matching_count(min_entries_threshold)
+            total_est = est_s1 + est_s2
+
+            def stage1_callback(done, total, msg):
+                self._update_status(msg)
+                # Map stage 1 to its portion of total_est
+                prog = done / total_est if total_est > 0 else 0
+                self.after(0, lambda: self._progress_fill.place(relwidth=min(0.95, prog)))
 
             session = requests.Session()
-            all_scenarios = fetch_all_scenarios(min_entries=min_entries_threshold, session=session)
+            all_scenarios = fetch_all_scenarios(
+                min_entries=min_entries_threshold, 
+                session=session, 
+                progress_callback=stage1_callback
+            )
             logger.info("API returned %d total scenarios", len(all_scenarios))
 
             # Save scenarios to cache
@@ -1319,6 +1463,7 @@ class KovaaksApp(tk.Tk):
                 self._update_status(
                     f"Done (all from cache) — {played} played, {unplayed} unplayed"
                 )
+                self._update_progress(100, 100)
                 return
 
             lock = threading.Lock()
@@ -1438,6 +1583,10 @@ class KovaaksApp(tk.Tk):
                         f"Fetching scores… {done}/{total_to_fetch} "
                         f"({cached_count} cached, {errors} errors) — ETA {eta}"
                     )
+                    # Map stage 2: starts from wherever stage 1 finished
+                    s1_actual = len(all_scenarios)
+                    prog = (s1_actual + done) / (s1_actual + total_to_fetch) if (s1_actual + total_to_fetch) > 0 else 1.0
+                    self.after(0, lambda: self._progress_fill.place(relwidth=min(1.0, prog)))
                 # Live-refresh tabs every 100 completions
                 if done - last_refresh[0] >= 100:
                     last_refresh[0] = done
@@ -1466,6 +1615,7 @@ class KovaaksApp(tk.Tk):
                 f"Done — {played} played, {unplayed} unplayed "
                 f"({errors} errors)"
             )
+            self._update_progress(100, 100)
 
         except Exception as e:
             logger.exception("Error in _do_fetch_all")
@@ -1647,6 +1797,13 @@ class KovaaksApp(tk.Tk):
     def _update_status(self, msg):
         logger.info(msg)
         self.after(0, lambda: self._status_var.set(msg))
+
+    def _update_progress(self, current, total):
+        if total > 0:
+            val = current / total
+            self.after(0, lambda: self._progress_fill.place(relwidth=val))
+        else:
+            self.after(0, lambda: self._progress_fill.place(relwidth=0))
 
     # -------------------------------------------------------------------
     # Column visibility
