@@ -537,11 +537,7 @@ class KovaaksApp(tk.Tk):
             if col_name in always_visible:
                 continue
             default = saved is None or col_name in saved
-            
-            # Force recently added columns to be visible even if old config is loaded
-            if col_name in {"New Entries / Day", "Trend Mult"} and saved and col_name not in saved:
-                default = True
-                
+
             self._visible_cols[col_name] = tk.BooleanVar(value=default)
 
         self._running = False
