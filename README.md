@@ -66,6 +66,3 @@ The Potential column ranks scenarios by practice value using:
 | Enter | Launch selected scenario |
 | Right-click table | Toggle column visibility |
 
-## License
-
-MIT
