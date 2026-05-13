@@ -710,8 +710,8 @@ class SettingsDialog(tk.Toplevel):
         
         n_scenarios = get_estimated_matching_count(m)
         
-        # ~0.12s total per valid scenario (fetch + score)
-        total_seconds = int(n_scenarios * 0.12)
+        # ~0.02s total per valid scenario (score fetch only)
+        total_seconds = int(n_scenarios * 0.02)
         if total_seconds < 60:
             est_text = f"~{total_seconds}s ETA"
         else:
