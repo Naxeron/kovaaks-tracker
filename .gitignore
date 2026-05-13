@@ -1,8 +1,6 @@
 # Credentials and local config
 config.json
 scores_cache.json
-scenarios.json
-scenarios_history.json.gz
 
 # Logs
 *.log
