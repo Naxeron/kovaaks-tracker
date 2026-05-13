@@ -851,7 +851,7 @@ class KovaaksApp(tk.Tk):
     def _check_github_updates(self):
         """Lightweight check to see if GitHub files have changed via ETags/Last-Modified."""
         urls = [
-            "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios.json",
+            "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios.json.gz",
             "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios_history.json.gz"
         ]
         
