@@ -1442,17 +1442,17 @@ class KovaaksApp(tk.Tk):
                     progress_callback=stage1_callback
                 )
                 logger.info("API returned %d total scenarios", len(all_scenarios))
+                
+                # Only update local scenario cache if we did a full API fetch
+                scores_cache["scenarios"] = all_scenarios
+                try:
+                    with open(SCORES_CACHE, "w", encoding="utf-8") as f:
+                        json.dump(scores_cache, f, separators=(",", ":"))
+                    logger.info("Saved scenarios to local cache %s", SCORES_CACHE)
+                except OSError as e:
+                    logger.warning("Could not save cache: %s", e)
             else:
                 self._update_progress(0.4, 1.0) # Instant progress jump for repo fetch
-
-            # Save scenarios to cache
-            scores_cache["scenarios"] = all_scenarios
-            try:
-                with open(SCORES_CACHE, "w", encoding="utf-8") as f:
-                    json.dump(scores_cache, f, separators=(",", ":"))
-                logger.info("Saved scenarios to cache %s", SCORES_CACHE)
-            except OSError as e:
-                logger.warning("Could not save cache: %s", e)
 
             # Filter to min_entries_threshold
             master = []
