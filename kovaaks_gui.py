@@ -1395,32 +1395,48 @@ class KovaaksApp(tk.Tk):
                 return
             logger.debug("JWT token obtained (length=%d)", len(self._jwt_token))
 
-            # ── Step 2: Fetch all scenarios (>1000 entries by default) ──
-            self._update_status("Fetching all scenarios (accurate counts)…")
+            # ── Step 2: Fetch all scenarios (try GitHub first, fallback to API) ──
+            self._update_status("Fetching all scenarios…")
 
             # Reuse cache loaded at startup
             scores_cache = self._scores_cache
-
             min_entries_threshold = int(self._cfg.get("min_entries", MIN_ENTRIES))
             
-            # Estimates for the two stages
-            est_s1 = get_estimated_fetch_count(min_entries_threshold)
-            est_s2 = get_estimated_matching_count(min_entries_threshold)
-            total_est = est_s1 + est_s2
+            all_scenarios = None
+            repo_url = "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios.json"
+            
+            try:
+                logger.info("Attempting to fetch scenarios from GitHub repo...")
+                self._update_status("Downloading scenarios from repository…")
+                resp = requests.get(repo_url, timeout=30)
+                if resp.status_code == 200:
+                    all_scenarios = resp.json()
+                    logger.info("Successfully fetched %d scenarios from GitHub", len(all_scenarios))
+            except Exception as e:
+                logger.warning("Failed to fetch scenarios from GitHub: %s", e)
 
-            def stage1_callback(done, total, msg):
-                self._update_status(msg)
-                # Map stage 1 to its portion of total_est
-                prog = done / total_est if total_est > 0 else 0
-                self._update_progress(min(0.95, prog), 1.0)
+            if not all_scenarios:
+                self._update_status("Fetching all scenarios (API fallback)…")
+                # Estimates for the two stages
+                est_s1 = get_estimated_fetch_count(min_entries_threshold)
+                est_s2 = get_estimated_matching_count(min_entries_threshold)
+                total_est = est_s1 + est_s2
 
-            session = requests.Session()
-            all_scenarios = fetch_all_scenarios(
-                min_entries=min_entries_threshold, 
-                session=session, 
-                progress_callback=stage1_callback
-            )
-            logger.info("API returned %d total scenarios", len(all_scenarios))
+                def stage1_callback(done, total, msg):
+                    self._update_status(msg)
+                    # Map stage 1 to its portion of total_est
+                    prog = done / total_est if total_est > 0 else 0
+                    self._update_progress(min(0.95, prog), 1.0)
+
+                session = requests.Session()
+                all_scenarios = fetch_all_scenarios(
+                    min_entries=min_entries_threshold, 
+                    session=session, 
+                    progress_callback=stage1_callback
+                )
+                logger.info("API returned %d total scenarios", len(all_scenarios))
+            else:
+                self._update_progress(0.4, 1.0) # Instant progress jump for repo fetch
 
             # Save scenarios to cache
             scores_cache["scenarios"] = all_scenarios
