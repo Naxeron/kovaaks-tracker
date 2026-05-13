@@ -19,7 +19,6 @@ A vibe coded tracker for KovaaKs, primarily built for sandbox rank farming and s
 ## Requirements
 
 - Python 3.10+
-- Linux (reads stats from `~/.local/share/Steam/steamapps/common/FPSAimTrainer/`)
 - A KovaaKs account (username & password)
 
 ## Installation
