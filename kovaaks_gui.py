@@ -977,7 +977,8 @@ class KovaaksApp(tk.Tk):
         if not all_scenarios:
             return
 
-        # Filter to >=MIN_ENTRIES
+        # Filter to config-defined min entries
+        min_entries_threshold = int(self._cfg.get("min_entries", MIN_ENTRIES))
         master = []
         for s in all_scenarios:
             entries = s.get("counts", {}).get("entries", 0)
@@ -985,7 +986,7 @@ class KovaaksApp(tk.Tk):
                 entries = int(entries)
             except (ValueError, TypeError):
                 entries = 0
-            if entries >= MIN_ENTRIES:
+            if entries >= min_entries_threshold:
                 master.append(s)
 
         if not master:
