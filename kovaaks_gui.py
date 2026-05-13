@@ -1406,12 +1406,19 @@ class KovaaksApp(tk.Tk):
             repo_url = "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios.json"
             
             try:
-                logger.info("Attempting to fetch scenarios from GitHub repo...")
+                logger.info("Attempting to fetch scenarios from GitHub repo: %s", repo_url)
                 self._update_status("Downloading scenarios from repository…")
                 resp = requests.get(repo_url, timeout=30)
+                logger.info("GitHub response status: %d", resp.status_code)
                 if resp.status_code == 200:
-                    all_scenarios = resp.json()
-                    logger.info("Successfully fetched %d scenarios from GitHub", len(all_scenarios))
+                    try:
+                        all_scenarios = resp.json()
+                        logger.info("Successfully fetched %d scenarios from GitHub", len(all_scenarios))
+                    except json.JSONDecodeError as je:
+                        logger.error("Failed to decode scenarios.json: %s", je)
+                        logger.debug("First 200 chars of response: %s", resp.text[:200])
+                else:
+                    logger.warning("GitHub returned non-200 status: %d", resp.status_code)
             except Exception as e:
                 logger.warning("Failed to fetch scenarios from GitHub: %s", e)
 
