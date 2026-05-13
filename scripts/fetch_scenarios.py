@@ -12,7 +12,7 @@ import datetime
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("fetch_scenarios")
 
-SCENARIOS_JSON = "scenarios.json"
+SCENARIOS_JSON = "scenarios.json.gz"
 SCENARIOS_HISTORY_JSON = "scenarios_history.json.gz"
 
 def _api_request_with_retry(method, url, timeout=30, max_retries=5, session=None, **kwargs):
@@ -121,7 +121,7 @@ if __name__ == "__main__":
         existing_scenarios = {}
         if os.path.exists(SCENARIOS_JSON):
             try:
-                with open(SCENARIOS_JSON, "r", encoding="utf-8") as f:
+                with gzip.open(SCENARIOS_JSON, "rt", encoding="utf-8") as f:
                     data = json.load(f)
                     # Use leaderboardId as key for deduplication
                     existing_scenarios = {s.get("leaderboardId"): s for s in data if s.get("leaderboardId")}
@@ -155,7 +155,7 @@ if __name__ == "__main__":
         # Sort by entries count descending
         cleaned_list.sort(key=lambda x: int(x.get("counts", {}).get("entries", 0)), reverse=True)
 
-        with open(SCENARIOS_JSON, "w", encoding="utf-8") as f:
+        with gzip.open(SCENARIOS_JSON, "wt", encoding="utf-8") as f:
             json.dump(cleaned_list, f, separators=(",", ":"))
         
         logger.info(f"Merged and saved {len(cleaned_list)} total scenarios to {SCENARIOS_JSON}")

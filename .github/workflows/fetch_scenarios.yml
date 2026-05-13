@@ -33,8 +33,8 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f scenarios.json scenarios_history.json.gz
-          if git commit -m "Update scenarios.json"; then
+          git add -f scenarios.json.gz scenarios_history.json.gz
+          if git commit -m "Update scenarios.json.gz"; then
             git pull --rebase origin main
             git push
           else
