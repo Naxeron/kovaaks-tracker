@@ -34,8 +34,6 @@ pip install requests
 python kovaaks_gui.py
 ```
 
-> **Note:** Tkinter ships with most Python installations. If missing, install it via your package manager (e.g. `sudo apt install python3-tk`).
-
 ## Usage
 
 1. **Launch** — Run `python kovaaks_gui.py`
