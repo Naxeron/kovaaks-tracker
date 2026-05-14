@@ -668,6 +668,16 @@ class SettingsDialog(tk.Toplevel):
         self._refresh_interval_entry.grid(row=row, column=1, sticky="w", **pad)
         row += 1
 
+        # Always show total points
+        ttk.Label(self, text="Always display total points", style="Dark.TLabel").grid(
+            row=row, column=0, sticky="w", **pad)
+        self._always_show_total_points_var = tk.BooleanVar(value=cfg.get("always_show_total_points", True))
+        self._always_show_total_points_cb = tk.Checkbutton(self, variable=self._always_show_total_points_var, bg=BG, activebackground=BG,
+                                selectcolor=BG, bd=0, highlightthickness=0,
+                                fg="white", activeforeground="white")
+        self._always_show_total_points_cb.grid(row=row, column=1, sticky="w", padx=12)
+        row += 1
+
         # Traces for UI interactivity
         self._auto_refresh_var.trace_add("write", self._update_ui_states)
         self._auto_refresh_github_var.trace_add("write", self._update_ui_states)
@@ -721,6 +731,7 @@ class SettingsDialog(tk.Toplevel):
         self.result["auto_refresh"] = self._auto_refresh_var.get()
         self.result["auto_refresh_github_only"] = self._auto_refresh_github_var.get()
         self.result["refresh_interval"] = self._refresh_interval_var.get().strip()
+        self.result["always_show_total_points"] = self._always_show_total_points_var.get()
         self.destroy()
 
     def _update_estimate(self, *_args):
@@ -765,6 +776,7 @@ class KovaaksApp(tk.Tk):
         self._filter_var = tk.StringVar()
         self._count_var = tk.StringVar(value="")
         self._points_var = tk.StringVar(value="")
+        self._potential_var = tk.StringVar(value="")
         self._sort_state: tuple[str, bool] | None = None
         self._filters: dict[str, tk.BooleanVar] = {}
 
@@ -790,6 +802,8 @@ class KovaaksApp(tk.Tk):
         self._poll_stats_id: str | None = None
         self._autofit_pending: str | None = None  # after() ID for debounced auto-fit
         self._last_window_width: int = 0
+        self._global_points_sum = 0
+        self._global_potential_points_sum = 0
 
         # Autoplay state
         self._autoplay_var = tk.BooleanVar(value=False)
@@ -1026,6 +1040,10 @@ class KovaaksApp(tk.Tk):
         count_label = ttk.Label(filter_frame, textvariable=self._count_var,
                                 style="Dark.TLabel")
         count_label.pack(side="right", padx=8)
+
+        potential_label = ttk.Label(filter_frame, textvariable=self._potential_var,
+                                     style="Dark.TLabel")
+        potential_label.pack(side="right", padx=8)
 
         points_label = ttk.Label(filter_frame, textvariable=self._points_var,
                                  style="Dark.TLabel")
@@ -1403,6 +1421,7 @@ class KovaaksApp(tk.Tk):
             self._cfg.update(dlg.result)
             save_config(self._cfg)
             self._update_status("Settings saved.")
+            self._apply_filter()
 
             # Update auto-refresh timer
             self._schedule_next_auto_refresh()
@@ -1447,20 +1466,38 @@ class KovaaksApp(tk.Tk):
                 
         self._count_var.set(f"{len(rows)} rows")
         
-        total_points = 0
-        for r in rows:
-            try:
-                rank = r.get("My Rank", "")
-                entries = r.get("Entry Count", "")
-                if rank and entries:
-                    total_points += (int(entries) - int(rank))
-            except (ValueError, TypeError):
-                continue
-        
-        if total_points > 0:
-            self._points_var.set(f"Points: {total_points:,}")
+        if self._cfg.get("always_show_total_points", True):
+            points_to_show = self._global_points_sum
+            potential_to_show = self._global_potential_points_sum
+        else:
+            total_points = 0
+            total_potential = 0
+            for r in rows:
+                try:
+                    rank = r.get("My Rank", "")
+                    entries = r.get("Entry Count", "")
+                    if entries:
+                        e_val = int(entries)
+                        if rank:
+                            r_val = int(rank)
+                            total_points += (e_val - r_val)
+                            total_potential += (r_val - 1)
+                        else:
+                            total_potential += (e_val - 1)
+                except (ValueError, TypeError):
+                    continue
+            points_to_show = total_points
+            potential_to_show = total_potential
+
+        if points_to_show > 0:
+            self._points_var.set(f"Points: {points_to_show:,}")
         else:
             self._points_var.set("")
+
+        if potential_to_show > 0:
+            self._potential_var.set(f"Potential Points: {potential_to_show:,}")
+        else:
+            self._potential_var.set("")
 
         self._schedule_autofit()
         
@@ -1929,6 +1966,8 @@ class KovaaksApp(tk.Tk):
         rows = []
         played = 0
         unplayed = 0
+        self._global_points_sum = 0
+        self._global_potential_points_sum = 0
 
         stats_dir = self._get_stats_dir()
         local_stats = _get_local_stats(stats_dir)
@@ -1990,6 +2029,21 @@ class KovaaksApp(tk.Tk):
                             best = (fr["friend"], frank, fr["score"], fr.get("date", ""))
 
                 row["My Rank"] = str(user_by_lid[lid]["rank"]) if has_user else ""
+                if has_user:
+                    try:
+                        r_val = int(user_by_lid[lid]["rank"])
+                        e_val = int(info["entries"])
+                        self._global_points_sum += (e_val - r_val)
+                        self._global_potential_points_sum += (r_val - 1)
+                    except (ValueError, TypeError):
+                        pass
+                else:
+                    try:
+                        e_val = int(info["entries"])
+                        self._global_potential_points_sum += (e_val - 1)
+                    except (ValueError, TypeError):
+                        pass
+
                 row["My Score"] = str(user_by_lid[lid]["score"]) if has_user else ""
                 row["Score Date"] = user_by_lid[lid].get("date", "") if has_user else ""
                 row["Best Friend"] = best[0] if best else ""
@@ -2036,6 +2090,7 @@ class KovaaksApp(tk.Tk):
                         # 6. Final Potential — *1000 converts small log floats to readable ints
                         potential = (base_potential * 1000) * time_factor * fatigue_factor * plateau_penalty * trend_factor * competition_multiplier
                         row["Potential"] = f"{int(potential)}"
+                        # (Removed global summation of formula-based potential)
 
                     except (ValueError, TypeError, ZeroDivisionError):
                         row["Percentile"] = ""
