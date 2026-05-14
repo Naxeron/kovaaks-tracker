@@ -171,8 +171,25 @@ if __name__ == "__main__":
                 logger.warning(f"Could not load history: {e}")
 
         # Add current timestamp
-        now_str = datetime.datetime.now().isoformat()
-        history_data["timestamps"].append(now_str)
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        now_str = now.isoformat()
+        
+        replace_latest = False
+        if history_data["timestamps"]:
+            last_ts_str = history_data["timestamps"][-1]
+            try:
+                # Handle potential Z suffix just in case
+                lk = last_ts_str.replace("Z", "+00:00") if "Z" in last_ts_str else last_ts_str
+                last_dt = datetime.datetime.fromisoformat(lk).replace(tzinfo=None)
+                if (now - last_dt).total_seconds() < 3600:
+                    replace_latest = True
+            except ValueError:
+                pass
+
+        if not replace_latest:
+            history_data["timestamps"].append(now_str)
+            for lid in history_data["history"]:
+                history_data["history"][lid].append(None)
         
         # Update history for all cleaned scenarios
         current_history = history_data["history"]
@@ -181,16 +198,16 @@ if __name__ == "__main__":
             entries = s["counts"]["entries"]
             if lid not in current_history:
                 # Initialize with nulls for past timestamps to keep alignment
-                current_history[lid] = [None] * (len(history_data["timestamps"]) - 1)
-            current_history[lid].append(entries)
+                current_history[lid] = [None] * len(history_data["timestamps"])
+            current_history[lid][-1] = entries
 
         # Ensure all existing LIDs also get a value (None if not in current fetch)
         for lid, counts in current_history.items():
-            if len(counts) < len(history_data["timestamps"]):
+            while len(counts) < len(history_data["timestamps"]):
                 counts.append(None)
 
-        # Prune to last 48 records
-        MAX_HISTORY = 48
+        # Prune to last 168 records (7 days if 1 point per hour)
+        MAX_HISTORY = 168
         if len(history_data["timestamps"]) > MAX_HISTORY:
             history_data["timestamps"] = history_data["timestamps"][-MAX_HISTORY:]
             for lid in current_history:
