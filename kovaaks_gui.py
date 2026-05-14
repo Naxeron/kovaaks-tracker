@@ -2475,7 +2475,8 @@ class KovaaksApp(tk.Tk):
                         if user_entry:
                             self._user_by_lid[lid] = user_entry
                             updated = True
-                            logger.info("Auto-updated score for '%s' (lid=%s)", username, lid)
+                            sname = self._scenario_info.get(lid, {}).get("name", lid)
+                            logger.info("Auto-updated score for %s", sname)
                         if friend_entries:
                             self._friends_by_lid[lid] = friend_entries
                             
