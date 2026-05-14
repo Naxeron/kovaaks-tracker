@@ -2296,16 +2296,18 @@ class KovaaksApp(tk.Tk):
                             lids_to_update[lid] = -999999.0
                         break
 
-        # Trigger UI refresh immediately to show new "Local Runs" counts
-        self.after(0, self._rebuild_data)
-
-        # Autoplay: advance immediately on local score detection (before API calls)
+        # Autoplay: advance immediately on local score detection (before API calls).
+        # We do this BEFORE the UI refresh so we can find the "next" item in the current sorted view
+        # before the finished scenario potentially jumps to a new position.
         if self._autoplay_var.get() and self._autoplay_current_scenario:
             if snames & {self._autoplay_current_scenario}:
                 logger.info("Autoplay: local score detected for '%s', advancing…",
                             self._autoplay_current_scenario)
-                # Capture next scenario NOW while the row still exists in the view
                 self.after(0, self._autoplay_advance)
+
+        # Trigger UI refresh immediately to show new "Local Runs" counts.
+        # This is queued after autoplay advance so the next scenario is already selected.
+        self.after(0, self._rebuild_data)
 
         if not lids_to_update:
             return
