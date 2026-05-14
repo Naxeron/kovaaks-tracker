@@ -130,7 +130,7 @@ if __name__ == "__main__":
                 logger.warning(f"Could not load existing scenarios: {e}")
 
         # Fetch new scenarios
-        new_scenarios_list = fetch_all_scenarios(pages_limit=args.pages, entries_limit=args.)
+        new_scenarios_list = fetch_all_scenarios(pages_limit=args.pages, entries_limit=args.min_entries)
         
         # Merge new into existing (new overwrites old for same leaderboardId)
         for s in new_scenarios_list:
