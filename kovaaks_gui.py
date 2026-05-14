@@ -898,6 +898,19 @@ class KovaaksApp(tk.Tk):
                 self._update_status("Checking for GitHub updates...")
                 if not self._check_github_updates():
                     logger.info("Auto-refresh skipped: No updates on GitHub.")
+                    if self._scenario_info:
+                        fake_master = []
+                        for lid, info in self._scenario_info.items():
+                            fake_master.append({
+                                "leaderboardId": lid,
+                                "counts": {"entries": info.get("entries", 0)}
+                            })
+                        self._record_history_points(fake_master)
+                        try:
+                            with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
+                                json.dump(self._scores_cache, f, separators=(",", ":"))
+                        except OSError:
+                            pass
                     self._update_status("Ready (GitHub up-to-date)")
                     self._schedule_next_auto_refresh()
                     return
@@ -1590,6 +1603,7 @@ class KovaaksApp(tk.Tk):
                     if etag:
                         if "last_etags" not in self._cfg: self._cfg["last_etags"] = {}
                         self._cfg["last_etags"]["scenarios.json.gz"] = etag
+                        save_config(self._cfg)
 
                     try:
                         with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as f:
@@ -1612,6 +1626,7 @@ class KovaaksApp(tk.Tk):
                     if etag:
                         if "last_etags" not in self._cfg: self._cfg["last_etags"] = {}
                         self._cfg["last_etags"]["scenarios_history.json.gz"] = etag
+                        save_config(self._cfg)
 
                     try:
                         with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as f:
@@ -1623,7 +1638,8 @@ class KovaaksApp(tk.Tk):
                         if h_timestamps and h_data:
                             local_history = scores_cache.get("entry_history", {})
                             merged_count = 0
-                            for lid, counts in h_data.items():
+                            for lid_raw, counts in h_data.items():
+                                lid = str(lid_raw)
                                 if lid not in local_history:
                                     local_history[lid] = {}
                                 for i, count in enumerate(counts):
@@ -1685,22 +1701,7 @@ class KovaaksApp(tk.Tk):
             logger.info("Filtered to %d scenarios with >=%d entries", len(master), min_entries_threshold)
             
             # Record current entry counts for history trend
-            now_str = datetime.datetime.now().isoformat()
-            history = scores_cache.get("entry_history", {})
-            for s in master:
-                lid = str(s.get("leaderboardId", ""))
-                entries = s.get("counts", {}).get("entries", 0)
-                try:
-                    entries = int(entries)
-                except (ValueError, TypeError):
-                    continue
-                if lid not in history:
-                    history[lid] = {}
-                history[lid][now_str] = entries
-                if len(history[lid]) > 48:
-                    oldest_key = min(history[lid].keys())
-                    del history[lid][oldest_key]
-            scores_cache["entry_history"] = history
+            self._record_history_points(master)
 
             # Build lid → scenario info map
             scenario_info = {str(s.get("leaderboardId", "")): {
@@ -2557,6 +2558,27 @@ class KovaaksApp(tk.Tk):
         webbrowser.open(uri)
         self._update_status(
             f"Autoplay: launching '{next_scenario}' — waiting for score…")
+
+
+    def _record_history_points(self, scenarios_list):
+        """Record current entry counts into the local history cache."""
+        now_str = datetime.datetime.now().isoformat()
+        history = self._scores_cache.get("entry_history", {})
+        for s in scenarios_list:
+            lid = str(s.get("leaderboardId", ""))
+            entries = s.get("counts", {}).get("entries", 0)
+            try:
+                entries = int(entries)
+            except (ValueError, TypeError):
+                continue
+            if lid not in history:
+                history[lid] = {}
+            history[lid][now_str] = entries
+            # Prune to last 48 records
+            if len(history[lid]) > 48:
+                oldest_key = min(history[lid].keys())
+                del history[lid][oldest_key]
+        self._scores_cache["entry_history"] = history
 
 
 # ---------------------------------------------------------------------------
