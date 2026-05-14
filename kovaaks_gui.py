@@ -1993,9 +1993,12 @@ class KovaaksApp(tk.Tk):
                 if len(dates) >= 2:
                     try:
                         d0_str = dates[0] if len(dates[0]) > 10 else dates[0] + "T00:00:00"
-                        oldest = datetime.datetime.fromisoformat(d0_str)
+                        d0_str = d0_str.replace("Z", "+00:00") if "Z" in d0_str else d0_str
+                        oldest = datetime.datetime.fromisoformat(d0_str).replace(tzinfo=None)
+                        
                         d1_str = dates[-1] if len(dates[-1]) > 10 else dates[-1] + "T00:00:00"
-                        newest = datetime.datetime.fromisoformat(d1_str)
+                        d1_str = d1_str.replace("Z", "+00:00") if "Z" in d1_str else d1_str
+                        newest = datetime.datetime.fromisoformat(d1_str).replace(tzinfo=None)
                         
                         seconds_diff = (newest - oldest).total_seconds()
                         if seconds_diff >= 1800:  # Need at least 30 minutes to project steady trend
@@ -2618,8 +2621,24 @@ class KovaaksApp(tk.Tk):
 
     def _record_history_points(self, scenarios_list):
         """Record current entry counts into the local history cache."""
-        now_str = datetime.datetime.now().isoformat()
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        now_str = now.isoformat()
         history = self._scores_cache.get("entry_history", {})
+        
+        # Clean up any "future" timestamps caused by previous timezone mismatches
+        for lid in list(history.keys()):
+            bad_keys = []
+            for k in history[lid].keys():
+                try:
+                    lk = k.replace("Z", "+00:00") if "Z" in k else k
+                    dt = datetime.datetime.fromisoformat(lk).replace(tzinfo=None)
+                    if (dt - now).total_seconds() > 3600:
+                        bad_keys.append(k)
+                except ValueError:
+                    pass
+            for k in bad_keys:
+                del history[lid][k]
+        
         for s in scenarios_list:
             lid = str(s.get("leaderboardId", ""))
             entries = s.get("counts", {}).get("entries", 0)
@@ -2627,11 +2646,25 @@ class KovaaksApp(tk.Tk):
                 entries = int(entries)
             except (ValueError, TypeError):
                 continue
+                
             if lid not in history:
                 history[lid] = {}
+                
+            if history[lid]:
+                latest_key = max(history[lid].keys())
+                try:
+                    lk = latest_key.replace("Z", "+00:00") if "Z" in latest_key else latest_key
+                    latest_dt = datetime.datetime.fromisoformat(lk).replace(tzinfo=None)
+                    if (now - latest_dt).total_seconds() < 3600:
+                        # Update the value of the existing latest timestamp instead of making a new one
+                        history[lid][latest_key] = entries
+                        continue
+                except ValueError:
+                    pass
+                    
             history[lid][now_str] = entries
-            # Prune to last 48 records
-            if len(history[lid]) > 48:
+            # Prune to last 168 records (7 days)
+            if len(history[lid]) > 168:
                 oldest_key = min(history[lid].keys())
                 del history[lid][oldest_key]
         self._scores_cache["entry_history"] = history
