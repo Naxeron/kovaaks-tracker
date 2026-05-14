@@ -764,6 +764,7 @@ class KovaaksApp(tk.Tk):
         self._tree: ttk.Treeview | None = None
         self._filter_var = tk.StringVar()
         self._count_var = tk.StringVar(value="")
+        self._points_var = tk.StringVar(value="")
         self._sort_state: tuple[str, bool] | None = None
         self._filters: dict[str, tk.BooleanVar] = {}
 
@@ -1012,6 +1013,10 @@ class KovaaksApp(tk.Tk):
         count_label = ttk.Label(filter_frame, textvariable=self._count_var,
                                 style="Dark.TLabel")
         count_label.pack(side="right", padx=8)
+
+        points_label = ttk.Label(filter_frame, textvariable=self._points_var,
+                                 style="Dark.TLabel")
+        points_label.pack(side="right", padx=8)
 
         # Toggle filter buttons
         toggle_frame = tk.Frame(content, bg=BG, padx=12)
@@ -1428,6 +1433,22 @@ class KovaaksApp(tk.Tk):
                 items_to_select.append(item)
                 
         self._count_var.set(f"{len(rows)} rows")
+        
+        total_points = 0
+        for r in rows:
+            try:
+                rank = r.get("My Rank", "")
+                entries = r.get("Entry Count", "")
+                if rank and entries:
+                    total_points += (int(entries) - int(rank))
+            except (ValueError, TypeError):
+                continue
+        
+        if total_points > 0:
+            self._points_var.set(f"Points: {total_points:,}")
+        else:
+            self._points_var.set("")
+
         self._schedule_autofit()
         
         if items_to_select:
