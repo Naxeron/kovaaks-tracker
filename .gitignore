@@ -1,6 +1,6 @@
 # Credentials and local config
 config.json
-scores_cache.json
+scores_cache.json.gz
 
 # Logs
 *.log
