@@ -113,7 +113,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Fetch KovaaKs scenarios and update cache.")
     parser.add_argument("--pages", type=int, default=0, help="Number of pages to fetch (0 for all)")
-    parser.add_argument("--min-entries", type=int, default=10, help="Stop fetching when max entries on a page falls below this")
+    parser.add_argument("--min-entries", type=int, default=1000, help="Stop fetching when max entries on a page falls below this")
     args = parser.parse_args()
 
     try:
