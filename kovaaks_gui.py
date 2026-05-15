@@ -390,7 +390,7 @@ COLUMNS = [
     ("▶", 32),
     ("Scenario", 240),
     ("Entry Count", 80),
-    ("New Entries / Day", 120),
+    ("New Entries (24h)", 120),
     ("Trend Mult", 80),
     ("My Rank", 70),
     ("My Score", 85),
@@ -783,6 +783,20 @@ class KovaaksApp(tk.Tk):
         # Column visibility — ▶ and Scenario are always shown
         always_visible = {"▶", "Scenario"}
         saved = self._cfg.get("visible_columns", None)
+        # Migration: Rename 'New Entries / Day' or 'New Entries' to 'New Entries (24h)'
+        if saved:
+            new_saved = []
+            changed = False
+            for c in saved:
+                if c in ("New Entries / Day", "New Entries"):
+                    new_saved.append("New Entries (24h)")
+                    changed = True
+                else:
+                    new_saved.append(c)
+            if changed:
+                self._cfg["visible_columns"] = new_saved
+                saved = new_saved
+
         self._visible_cols: dict[str, tk.BooleanVar] = {}
         for col_name, _ in COLUMNS:
             if col_name in always_visible:
@@ -1988,6 +2002,7 @@ class KovaaksApp(tk.Tk):
 
             hist = entry_history.get(lid, {})
             popularity_trend = 0.0
+            actual_new_entries = 0
             if hist:
                 dates = sorted(hist.keys())
                 if len(dates) >= 2:
@@ -2001,10 +2016,23 @@ class KovaaksApp(tk.Tk):
                         newest = datetime.datetime.fromisoformat(d1_str).replace(tzinfo=None)
                         
                         seconds_diff = (newest - oldest).total_seconds()
-                        if seconds_diff >= 1800:  # Need at least 30 minutes to project steady trend
+                        if seconds_diff >= 1800:  # Need at least 30 minutes
+                            # 1. Full history for stability in Trend Mult / Potential
                             days_diff = seconds_diff / 86400.0
-                            entry_diff = hist[dates[-1]] - hist[dates[0]]
-                            popularity_trend = float(entry_diff) / days_diff
+                            entry_diff_total = hist[dates[-1]] - hist[dates[0]]
+                            popularity_trend = float(entry_diff_total) / days_diff
+                            
+                            # 2. 24h history for "New Entries (24h)" display
+                            target_24h = newest - datetime.timedelta(days=1)
+                            idx_24h = 0
+                            for i in range(len(dates) - 1, -1, -1):
+                                ds = dates[i].replace("Z", "+00:00") if "Z" in dates[i] else dates[i]
+                                if len(ds) <= 10: ds += "T00:00:00"
+                                dt = datetime.datetime.fromisoformat(ds).replace(tzinfo=None)
+                                if dt <= target_24h:
+                                    idx_24h = i
+                                    break
+                            actual_new_entries = hist[dates[-1]] - hist[dates[idx_24h]]
                     except ValueError:
                         pass
 
@@ -2013,7 +2041,7 @@ class KovaaksApp(tk.Tk):
             row = {
                 "Scenario": sname,
                 "Entry Count": str(info["entries"]),
-                "New Entries / Day": f"{popularity_trend:.1f}" if popularity_trend > 0 else "0.0",
+                "New Entries (24h)": str(actual_new_entries) if actual_new_entries > 0 else "0",
                 "Trend Mult": f"{competition_multiplier:.2f}x",
                 "Local Runs": str(lstats["count"]),
                 "Potential": "",
