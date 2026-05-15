@@ -141,24 +141,13 @@ if __name__ == "__main__":
         # Convert back to list and clean up
         merged_list = list(existing_scenarios.values())
         
-        cleaned_list = []
-        for s in merged_list:
-            cleaned = {
-                "leaderboardId": s.get("leaderboardId"),
-                "scenarioName": s.get("scenarioName"),
-                "counts": {
-                    "entries": s.get("counts", {}).get("entries", 0)
-                }
-            }
-            cleaned_list.append(cleaned)
-
         # Sort by entries count descending
-        cleaned_list.sort(key=lambda x: int(x.get("counts", {}).get("entries", 0)), reverse=True)
+        merged_list.sort(key=lambda x: int(x.get("counts", {}).get("entries", 0)), reverse=True)
 
         with gzip.open(SCENARIOS_JSON, "wt", encoding="utf-8") as f:
-            json.dump(cleaned_list, f, separators=(",", ":"))
+            json.dump(merged_list, f, separators=(",", ":"))
         
-        logger.info(f"Merged and saved {len(cleaned_list)} total scenarios to {SCENARIOS_JSON}")
+        logger.info(f"Merged and saved {len(merged_list)} total scenarios to {SCENARIOS_JSON}")
 
         # --- History Tracking ---
         history_data = {"timestamps": [], "history": {}}
@@ -191,9 +180,9 @@ if __name__ == "__main__":
             for lid in history_data["history"]:
                 history_data["history"][lid].append(None)
         
-        # Update history for all cleaned scenarios
+        # Update history for all merged scenarios
         current_history = history_data["history"]
-        for s in cleaned_list:
+        for s in merged_list:
             lid = str(s["leaderboardId"])
             entries = s["counts"]["entries"]
             if lid not in current_history:
