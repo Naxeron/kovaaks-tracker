@@ -947,8 +947,8 @@ class KovaaksApp(tk.Tk):
             for url in urls:
                 key = url.split("/")[-1]
                 logger.debug("Checking GitHub update for %s...", key)
-                # Use HEAD request to check headers only
-                resp = requests.head(url, timeout=10)
+                # Use HEAD request to check headers only with retry logic
+                resp = _api_request_with_retry("head", url, timeout=10)
                 if resp.status_code == 200:
                     etag = resp.headers.get("ETag")
                     last_modified = resp.headers.get("Last-Modified")
@@ -1701,7 +1701,7 @@ class KovaaksApp(tk.Tk):
             try:
                 logger.info("Attempting to fetch scenarios from GitHub repo: %s", repo_url)
                 self._update_status("Downloading scenarios from repository…")
-                resp = requests.get(repo_url, timeout=30)
+                resp = _api_request_with_retry("get", repo_url, timeout=30)
                 logger.info("GitHub response status: %d", resp.status_code)
                 if resp.status_code == 200:
                     # Update ETags in config
@@ -1726,7 +1726,7 @@ class KovaaksApp(tk.Tk):
             history_url = "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios_history.json.gz"
             try:
                 logger.info("Attempting to fetch history from GitHub: %s", history_url)
-                resp = requests.get(history_url, timeout=30)
+                resp = _api_request_with_retry("get", history_url, timeout=30)
                 if resp.status_code == 200:
                     etag = resp.headers.get("ETag") or resp.headers.get("Last-Modified")
                     if etag:
