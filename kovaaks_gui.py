@@ -553,11 +553,24 @@ class PasswordDialog(tk.Toplevel):
         
         ttk.Label(frame, text="Password:", style="Dark.TLabel").pack(side="left")
         self._entry_var = tk.StringVar()
-        self._entry = tk.Entry(frame, textvariable=self._entry_var, width=30,
+        
+        # Container for entry + toggle button
+        pw_container = tk.Frame(frame, bg=ENTRY_BG)
+        pw_container.pack(side="left", padx=10)
+
+        self._entry = tk.Entry(pw_container, textvariable=self._entry_var, width=26,
                                bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
                                font=("Segoe UI", 11), relief="flat", bd=4,
                                show="*")
-        self._entry.pack(side="left", padx=10)
+        self._entry.pack(side="left")
+        
+        self._show_password = False
+        self._toggle_btn = tk.Button(pw_container, text="\U0001F512", command=self._toggle_password,
+                                   bg=ENTRY_BG, fg=TEXT_DIM, activebackground=ENTRY_BG,
+                                   activeforeground=TEXT, font=("Segoe UI", 12),
+                                   relief="flat", bd=0, cursor="hand2")
+        self._toggle_btn.pack(side="left", padx=4)
+        
         self._entry.focus_set()
         
         btn_frame = tk.Frame(self, bg=BG)
@@ -580,6 +593,17 @@ class PasswordDialog(tk.Toplevel):
         x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
         y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{x}+{y}")
+
+    def _toggle_password(self):
+        self._show_password = not self._show_password
+        if self._show_password:
+            self._entry.config(show="")
+            self._toggle_btn.config(text="\U0001F441", bg=ACCENT, fg="#fff", 
+                                    activebackground=ACCENT_HOVER)
+        else:
+            self._entry.config(show="*")
+            self._toggle_btn.config(text="\U0001F512", bg=ENTRY_BG, fg=TEXT_DIM, 
+                                    activebackground=ENTRY_BG)
 
     def _on_login(self):
         self.result = self._entry_var.get().strip()
@@ -629,6 +653,26 @@ class SettingsDialog(tk.Toplevel):
                 self._est_label.pack(side="left", padx=8)
                 
                 var.trace_add("write", self._update_estimate)
+            elif key == "password":
+                pw_container = tk.Frame(self, bg=ENTRY_BG)
+                pw_container.grid(row=row, column=1, sticky="w", **pad)
+                
+                entry = tk.Entry(pw_container, textvariable=var, width=38,
+                                 bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
+                                 font=("Segoe UI", 11), relief="flat", bd=4,
+                                 show=show_char)
+                entry.pack(side="left")
+                
+                # We need to store a reference to the entry to toggle it
+                self._password_entry = entry
+                self._password_show = False
+                
+                self._password_toggle_btn = tk.Button(pw_container, text="\U0001F512", 
+                                           command=self._toggle_password_visibility,
+                                           bg=ENTRY_BG, fg=TEXT_DIM, activebackground=ENTRY_BG,
+                                           activeforeground=TEXT, font=("Segoe UI", 12),
+                                           relief="flat", bd=0, cursor="hand2")
+                self._password_toggle_btn.pack(side="left", padx=4)
             else:
                 entry = tk.Entry(self, textvariable=var, width=42,
                                  bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
@@ -733,6 +777,17 @@ class SettingsDialog(tk.Toplevel):
         self.result["refresh_interval"] = self._refresh_interval_var.get().strip()
         self.result["always_show_total_points"] = self._always_show_total_points_var.get()
         self.destroy()
+
+    def _toggle_password_visibility(self):
+        self._password_show = not self._password_show
+        if self._password_show:
+            self._password_entry.config(show="")
+            self._password_toggle_btn.config(text="\U0001F441", bg=ACCENT, fg="#fff",
+                                             activebackground=ACCENT_HOVER)
+        else:
+            self._password_entry.config(show="*")
+            self._password_toggle_btn.config(text="\U0001F512", bg=ENTRY_BG, fg=TEXT_DIM,
+                                             activebackground=ENTRY_BG)
 
     def _update_estimate(self, *_args):
         if not hasattr(self, "_est_label"):
