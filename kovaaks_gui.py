@@ -908,8 +908,8 @@ class KovaaksApp(tk.Tk):
         # Schedule auto refresh
         self._auto_refresh_id = None
         if self._cfg.get("auto_refresh", False):
-            # Initial check after 5 seconds, then periodic
-            self.after(5000, self._auto_refresh_step)
+            # Initial check after 10 seconds, then periodic
+            self.after(10000, self._auto_refresh_step)
 
     def _get_stats_dir(self):
         path = self._cfg.get("stats_dir", get_default_stats_dir())
@@ -978,25 +978,9 @@ class KovaaksApp(tk.Tk):
     def _auto_refresh_step(self):
         if self._cfg.get("auto_refresh", False) and not self._running:
             if self._cfg.get("auto_refresh_github_only", False):
-                self._update_status("Checking for GitHub updates...")
-                if not self._check_github_updates():
-                    logger.info("Auto-refresh skipped: No updates on GitHub.")
-                    if self._scenario_info:
-                        fake_master = []
-                        for lid, info in self._scenario_info.items():
-                            fake_master.append({
-                                "leaderboardId": lid,
-                                "counts": {"entries": info.get("entries", 0)}
-                            })
-                        self._record_history_points(fake_master)
-                        try:
-                            with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
-                                json.dump(self._scores_cache, f, separators=(",", ":"))
-                        except OSError:
-                            pass
-                    self._update_status("Ready (GitHub up-to-date)")
-                    self._schedule_next_auto_refresh()
-                    return
+                self._set_running(True, "Checking for GitHub updates...")
+                threading.Thread(target=self._do_background_github_check, daemon=True).start()
+                return
 
             username = self._cfg.get("username", "").strip()
             if username:
@@ -1005,6 +989,48 @@ class KovaaksApp(tk.Tk):
                 self._on_fetch_all(force_login=False)
         
         self._schedule_next_auto_refresh()
+
+    def _do_background_github_check(self):
+        """Run the GitHub check in a background thread to prevent UI freezing."""
+        try:
+            changed = self._check_github_updates()
+        except Exception as e:
+            logger.warning("Error during background GitHub updates check: %s", e)
+            changed = True  # Safe fallback
+        
+        self.after(0, self._on_background_github_check_complete, changed)
+
+    def _on_background_github_check_complete(self, changed):
+        """Handle the result of the background GitHub check on the main UI thread."""
+        self._set_running(False)
+        
+        if not self._cfg.get("auto_refresh", False):
+            self._update_status("Ready")
+            return
+
+        if not changed:
+            logger.info("Auto-refresh skipped: No updates on GitHub.")
+            if self._scenario_info:
+                fake_master = []
+                for lid, info in self._scenario_info.items():
+                    fake_master.append({
+                        "leaderboardId": lid,
+                        "counts": {"entries": info.get("entries", 0)}
+                    })
+                self._record_history_points(fake_master)
+                try:
+                    with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
+                        json.dump(self._scores_cache, f, separators=(",", ":"))
+                except OSError:
+                    pass
+            self._update_status("Ready (GitHub up-to-date)")
+            self._schedule_next_auto_refresh()
+        else:
+            username = self._cfg.get("username", "").strip()
+            if username:
+                self._on_fetch_all(force_login=False)
+            else:
+                self._schedule_next_auto_refresh()
 
     def _schedule_next_auto_refresh(self):
         if self._auto_refresh_id:
