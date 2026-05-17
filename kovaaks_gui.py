@@ -23,6 +23,7 @@ import gzip
 import io
 
 import requests
+import queue
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -819,6 +820,8 @@ class SettingsDialog(tk.Toplevel):
 class KovaaksApp(tk.Tk):
     def __init__(self):
         super().__init__()
+        self._gui_queue = queue.Queue()
+        self._process_gui_queue()
         self.title("KovaaKs Scenario Tracker")
         self.geometry("1280x780")
         self.minsize(900, 500)
@@ -998,7 +1001,7 @@ class KovaaksApp(tk.Tk):
             logger.warning("Error during background GitHub updates check: %s", e)
             changed = True  # Safe fallback
         
-        self.after(0, self._on_background_github_check_complete, changed)
+        self.run_in_gui_thread(self._on_background_github_check_complete, changed)
 
     def _on_background_github_check_complete(self, changed):
         """Handle the result of the background GitHub check on the main UI thread."""
@@ -2020,7 +2023,7 @@ class KovaaksApp(tk.Tk):
                 # Live-refresh tabs every 100 completions
                 if done - last_refresh[0] >= 100:
                     last_refresh[0] = done
-                    self._rebuild_data()
+                    self.run_in_gui_thread(self._rebuild_data)
 
             session = requests.Session()
             with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
@@ -2037,9 +2040,14 @@ class KovaaksApp(tk.Tk):
             # ── Step 5: Final tab rebuild + save ──
             with lock:
                 _save_cache()
-            played, unplayed = self._rebuild_data()
-
-
+            played = 0
+            unplayed = 0
+            for lid in self._scenario_info:
+                if lid in self._user_by_lid or lid in self._friends_by_lid:
+                    played += 1
+                else:
+                    unplayed += 1
+            self.run_in_gui_thread(self._rebuild_data)
 
             self._update_status(
                 f"Done — {played} played, {unplayed} unplayed "
@@ -2051,7 +2059,7 @@ class KovaaksApp(tk.Tk):
             logger.exception("Error in _do_fetch_all")
             self._update_status(f"Error: {e}")
         finally:
-            self.after(0, lambda: self._set_running(False))
+            self.run_in_gui_thread(self._set_running, False)
 
     def _rebuild_data(self):
         """Build unified row list from current data and update the UI."""
@@ -2261,11 +2269,11 @@ class KovaaksApp(tk.Tk):
     # -------------------------------------------------------------------
     def _update_status(self, msg):
         logger.info(msg)
-        self.after(0, lambda: self._status_var.set(msg))
+        self.run_in_gui_thread(self._status_var.set, msg)
 
     def _update_progress(self, current, total):
         target = (current / total) if total > 0 else 0
-        self.after(0, lambda: self._set_progress_target(target))
+        self.run_in_gui_thread(self._set_progress_target, target)
 
     def _set_progress_target(self, target):
         self._target_progress = target
@@ -2368,6 +2376,23 @@ class KovaaksApp(tk.Tk):
             ]
             save_config(self._cfg)
 
+    def run_in_gui_thread(self, func, *args, **kwargs):
+        """Put a callback onto the GUI queue to be executed on the main thread."""
+        self._gui_queue.put(lambda: func(*args, **kwargs))
+
+    def _process_gui_queue(self):
+        """Process tasks from the thread-safe GUI queue on the main thread."""
+        for _ in range(100):
+            try:
+                task = self._gui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                task()
+            except Exception as e:
+                logger.exception("Error executing queued GUI action: %s", e)
+        self.after(20, self._process_gui_queue)
+
     # -------------------------------------------------------------------
     # Log panel
     # -------------------------------------------------------------------
@@ -2389,7 +2414,7 @@ class KovaaksApp(tk.Tk):
             self._log_text.insert("end", line)
             self._log_text.configure(state="disabled")
             self._log_text.see("end")
-        self.after(0, _do)
+        self.run_in_gui_thread(_do)
 
     def _toggle_log(self):
         if self._log_visible:
@@ -2492,11 +2517,11 @@ class KovaaksApp(tk.Tk):
             if snames & {self._autoplay_current_scenario}:
                 logger.info("Autoplay: local score detected for '%s', advancing…",
                             self._autoplay_current_scenario)
-                self.after(0, self._autoplay_advance)
+                self.run_in_gui_thread(self._autoplay_advance)
 
         # Trigger UI refresh immediately to show new "Local Runs" counts.
         # This is queued after autoplay advance so the next scenario is already selected.
-        self.after(0, self._rebuild_data)
+        self.run_in_gui_thread(self._rebuild_data)
 
         if not lids_to_update:
             return
@@ -2511,13 +2536,13 @@ class KovaaksApp(tk.Tk):
             if not username or not password:
                 logger.info("Auto-sync: Local run detected, but cannot fetch API scores (not logged in).")
                 # Still rebuild to show the local run increment
-                self.after(0, self._rebuild_data)
+                self.run_in_gui_thread(self._rebuild_data)
                 return
             try:
                 self._jwt_token = kovaaks_login(username, password)
             except Exception as e:
                 logger.debug("Failed silent login during stats poll: %s", e)
-                self.after(0, self._rebuild_data)
+                self.run_in_gui_thread(self._rebuild_data)
                 return
                 
         updated = False
@@ -2627,7 +2652,7 @@ class KovaaksApp(tk.Tk):
                 pass
         
         # Always rebuild at the end to ensure UI is in sync even if API fetch failed
-        self.after(0, self._rebuild_data)
+        self.run_in_gui_thread(self._rebuild_data)
 
     # -------------------------------------------------------------------
     # Autoplay
