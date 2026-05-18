@@ -97,6 +97,7 @@ class KovaaksApp(tk.Tk):
         self._count_var = tk.StringVar(value="")
         self._points_var = tk.StringVar(value="")
         self._potential_var = tk.StringVar(value="")
+        self._projected_gain_var = tk.StringVar(value="")
         self._sort_state: tuple[str, bool] | None = None
         self._filters: dict[str, tk.BooleanVar] = {}
 
@@ -125,6 +126,7 @@ class KovaaksApp(tk.Tk):
         self._last_window_width: int = 0
         self._global_points_sum = 0
         self._global_potential_points_sum = 0
+        self._global_projected_gain_sum = 0
 
         # Thread safety: lock for shared data structures
         self._data_lock = threading.Lock()
@@ -395,6 +397,10 @@ class KovaaksApp(tk.Tk):
         potential_label = ttk.Label(filter_frame, textvariable=self._potential_var,
                                      style="Dark.TLabel")
         potential_label.pack(side="right", padx=8)
+
+        projected_gain_label = ttk.Label(filter_frame, textvariable=self._projected_gain_var,
+                                         style="Dark.TLabel")
+        projected_gain_label.pack(side="right", padx=8)
 
         points_label = ttk.Label(filter_frame, textvariable=self._points_var,
                                  style="Dark.TLabel")
@@ -731,6 +737,7 @@ class KovaaksApp(tk.Tk):
             scenario_info[lid] = {
                 "name": s.get("scenarioName", ""),
                 "entries": s.get("counts", {}).get("entries", ""),
+                "aimType": s.get("scenario", {}).get("aimType"),
             }
 
         # Extract scores
@@ -824,11 +831,22 @@ class KovaaksApp(tk.Tk):
         if self._cfg.get("always_show_total_points", True):
             points_to_show = self._global_points_sum
             potential_to_show = self._global_potential_points_sum
+            projected_gain_to_show = self._global_projected_gain_sum
         else:
             total_points = 0
             total_potential = 0
+            total_projected = 0
+            
+            # Using the stored aimType percentiles if possible
+            # Here we just iterate and use fallback 50.0 for projected gain if we don't recalculate fully.
+            # To be accurate when filtered, we just sum up the rows if we add Proj Gain to the rows. 
+            # Wait, since we are not adding Proj Gain column to the rows as requested by user,
+            # we will just recalculate the global_projected_gain_sum using the same rows.
+            # For simplicity, we just use the global projected gain since it's an estimate anyway, 
+            # or calculate it. We'll add the row's projected gain as a hidden field in the row dictionary so we can sum it!
             for r in rows:
                 try:
+                    total_projected += float(r.get("_projected_gain", 0))
                     rank = r.get("My Rank", "")
                     entries = r.get("Entry Count", "")
                     if entries:
@@ -843,6 +861,7 @@ class KovaaksApp(tk.Tk):
                     continue
             points_to_show = total_points
             potential_to_show = total_potential
+            projected_gain_to_show = int(total_projected)
 
         if points_to_show > 0:
             self._points_var.set(f"Points: {points_to_show:,}")
@@ -853,6 +872,11 @@ class KovaaksApp(tk.Tk):
             self._potential_var.set(f"Potential Points: {potential_to_show:,}")
         else:
             self._potential_var.set("")
+
+        if projected_gain_to_show > 0:
+            self._projected_gain_var.set(f"Projected Gain: {projected_gain_to_show:,}")
+        else:
+            self._projected_gain_var.set("")
 
         self._schedule_autofit()
         
@@ -989,6 +1013,36 @@ class KovaaksApp(tk.Tk):
         unplayed = 0
         self._global_points_sum = 0
         self._global_potential_points_sum = 0
+        self._global_projected_gain_sum = 0
+
+        # First pass: calculate average percentile per aimType
+        aim_type_stats = {}
+        for lid, info in scenario_info.items():
+            if lid in user_by_lid:
+                try:
+                    rank = int(user_by_lid[lid]["rank"])
+                    entries = int(info["entries"])
+                    if entries > 0:
+                        pct = (1 - rank / entries) * 100
+                        aim_type = info.get("aimType")
+                        if aim_type:
+                            if aim_type not in aim_type_stats:
+                                aim_type_stats[aim_type] = {"sum": 0.0, "count": 0}
+                            aim_type_stats[aim_type]["sum"] += pct
+                            aim_type_stats[aim_type]["count"] += 1
+                except (ValueError, TypeError):
+                    pass
+
+        aim_type_avgs = {}
+        total_sum = 0.0
+        total_count = 0
+        for atype, stats in aim_type_stats.items():
+            if stats["count"] > 0:
+                aim_type_avgs[atype] = stats["sum"] / stats["count"]
+                total_sum += stats["sum"]
+                total_count += stats["count"]
+
+        global_avg_pct = (total_sum / total_count) if total_count > 0 else 50.0
 
         stats_dir = self._get_stats_dir()
         # Use cached local stats unless marked dirty
@@ -1077,12 +1131,25 @@ class KovaaksApp(tk.Tk):
                         e_val = int(info["entries"])
                         self._global_points_sum += (e_val - r_val)
                         self._global_potential_points_sum += (r_val - 1)
+                        
+                        expected_pct = aim_type_avgs.get(info.get("aimType"), global_avg_pct)
+                        expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
+                        if r_val > expected_rank:
+                            gain = r_val - expected_rank
+                            self._global_projected_gain_sum += gain
+                            row["_projected_gain"] = gain
                     except (ValueError, TypeError):
                         pass
                 else:
                     try:
                         e_val = int(info["entries"])
                         self._global_potential_points_sum += (e_val - 1)
+                        
+                        expected_pct = aim_type_avgs.get(info.get("aimType"), global_avg_pct)
+                        expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
+                        gain = e_val - expected_rank
+                        self._global_projected_gain_sum += gain
+                        row["_projected_gain"] = gain
                     except (ValueError, TypeError):
                         pass
 
