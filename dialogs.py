@@ -7,6 +7,14 @@ from constants import (
 from config_helpers import get_default_stats_dir
 from data_processing import get_estimated_matching_count
 
+def _bind_entry_ctrl_a(entry):
+    def select_all(event):
+        event.widget.select_range(0, tk.END)
+        event.widget.icursor(tk.END)
+        return "break"
+    entry.bind("<Control-a>", select_all)
+    entry.bind("<Control-A>", select_all)
+
 class PasswordDialog(tk.Toplevel):
     """Modal dialog for KovaaKs password prompt on startup."""
 
@@ -31,7 +39,7 @@ class PasswordDialog(tk.Toplevel):
         self._entry_var = tk.StringVar()
         
         # Container for entry + toggle button
-        pw_container = tk.Frame(frame, bg=ENTRY_BG)
+        pw_container = tk.Frame(frame, bg=BG)
         pw_container.pack(side="left", padx=10)
 
         self._entry = tk.Entry(pw_container, textvariable=self._entry_var, width=26,
@@ -39,13 +47,14 @@ class PasswordDialog(tk.Toplevel):
                                font=("Segoe UI", 11), relief="flat", bd=4,
                                show="*")
         self._entry.pack(side="left")
+        _bind_entry_ctrl_a(self._entry)
         
         self._show_password = False
         self._toggle_btn = tk.Button(pw_container, text="\U0001F512", command=self._toggle_password,
-                                   bg=ENTRY_BG, fg=TEXT_DIM, activebackground=ENTRY_BG,
+                                   bg=BG, fg=TEXT_DIM, activebackground=BG,
                                    activeforeground=TEXT, font=("Segoe UI", 12),
-                                   relief="flat", bd=0, cursor="hand2")
-        self._toggle_btn.pack(side="left", padx=4)
+                                   relief="flat", bd=0, highlightthickness=0, cursor="hand2")
+        self._toggle_btn.pack(side="left", padx=4, fill="y")
         
         self._entry.focus_set()
         
@@ -78,8 +87,8 @@ class PasswordDialog(tk.Toplevel):
                                     activebackground=ACCENT_HOVER)
         else:
             self._entry.config(show="*")
-            self._toggle_btn.config(text="\U0001F512", bg=ENTRY_BG, fg=TEXT_DIM, 
-                                    activebackground=ENTRY_BG)
+            self._toggle_btn.config(text="\U0001F512", bg=BG, fg=TEXT_DIM, 
+                                    activebackground=BG)
 
     def _on_login(self):
         self.result = self._entry_var.get().strip()
@@ -124,13 +133,14 @@ class SettingsDialog(tk.Toplevel):
                                  font=("Segoe UI", 11), relief="flat", bd=4,
                                  show=show_char)
                 entry.pack(side="left")
+                _bind_entry_ctrl_a(entry)
                 
                 self._est_label = ttk.Label(frame, text="", style="Dark.TLabel", foreground=TEXT_DIM)
                 self._est_label.pack(side="left", padx=8)
                 
                 var.trace_add("write", self._update_estimate)
             elif key == "password":
-                pw_container = tk.Frame(self, bg=ENTRY_BG)
+                pw_container = tk.Frame(self, bg=BG)
                 pw_container.grid(row=row, column=1, sticky="w", **pad)
                 
                 entry = tk.Entry(pw_container, textvariable=var, width=38,
@@ -138,6 +148,7 @@ class SettingsDialog(tk.Toplevel):
                                  font=("Segoe UI", 11), relief="flat", bd=4,
                                  show=show_char)
                 entry.pack(side="left")
+                _bind_entry_ctrl_a(entry)
                 
                 # We need to store a reference to the entry to toggle it
                 self._password_entry = entry
@@ -145,16 +156,31 @@ class SettingsDialog(tk.Toplevel):
                 
                 self._password_toggle_btn = tk.Button(pw_container, text="\U0001F512", 
                                            command=self._toggle_password_visibility,
-                                           bg=ENTRY_BG, fg=TEXT_DIM, activebackground=ENTRY_BG,
+                                           bg=BG, fg=TEXT_DIM, activebackground=BG,
                                            activeforeground=TEXT, font=("Segoe UI", 12),
-                                           relief="flat", bd=0, cursor="hand2")
-                self._password_toggle_btn.pack(side="left", padx=4)
+                                           relief="flat", bd=0, highlightthickness=0, cursor="hand2")
+                self._password_toggle_btn.pack(side="left", padx=4, fill="y")
+            elif key == "stats_dir":
+                frame = tk.Frame(self, bg=BG)
+                frame.grid(row=row, column=1, sticky="w", **pad)
+                entry = tk.Entry(frame, textvariable=var, width=38,
+                                 bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
+                                 font=("Segoe UI", 11), relief="flat", bd=4)
+                entry.pack(side="left")
+                _bind_entry_ctrl_a(entry)
+                
+                btn = tk.Button(frame, text="Browse", command=lambda v=var: self._browse_stats_dir(v),
+                                bg=BG_LIGHTER, fg=TEXT, activebackground=BORDER,
+                                activeforeground=TEXT, font=("Segoe UI", 12),
+                                relief="flat", bd=0, highlightthickness=0, cursor="hand2")
+                btn.pack(side="left", padx=4, fill="y")
             else:
-                entry = tk.Entry(self, textvariable=var, width=42,
+                entry = tk.Entry(self, textvariable=var, width=38,
                                  bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
                                  font=("Segoe UI", 11), relief="flat", bd=4,
                                  show=show_char)
-                entry.grid(row=row, column=1, **pad)
+                entry.grid(row=row, column=1, sticky="w", **pad)
+                _bind_entry_ctrl_a(entry)
                 
             row += 1
             
@@ -186,6 +212,7 @@ class SettingsDialog(tk.Toplevel):
                          bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
                          font=("Segoe UI", 11), relief="flat", bd=4)
         self._refresh_interval_entry.grid(row=row, column=1, sticky="w", **pad)
+        _bind_entry_ctrl_a(self._refresh_interval_entry)
         row += 1
 
         # Always show total points
@@ -262,8 +289,14 @@ class SettingsDialog(tk.Toplevel):
                                              activebackground=ACCENT_HOVER)
         else:
             self._password_entry.config(show="*")
-            self._password_toggle_btn.config(text="\U0001F512", bg=ENTRY_BG, fg=TEXT_DIM,
-                                             activebackground=ENTRY_BG)
+            self._password_toggle_btn.config(text="\U0001F512", bg=BG, fg=TEXT_DIM,
+                                             activebackground=BG)
+
+    def _browse_stats_dir(self, var):
+        from tkinter import filedialog
+        path = filedialog.askdirectory(parent=self, initialdir=var.get() or None, title="Select Stats Folder")
+        if path:
+            var.set(path)
 
     def _update_estimate(self, *_args):
         if not hasattr(self, "_est_label"):

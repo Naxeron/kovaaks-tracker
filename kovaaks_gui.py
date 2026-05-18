@@ -63,7 +63,7 @@ from data_processing import (
     natural_sort_key,
     parse_leaderboard_entries,
 )
-from dialogs import PasswordDialog, SettingsDialog
+from dialogs import PasswordDialog, SettingsDialog, _bind_entry_ctrl_a
 from fetch_worker import run_fetch_all
 from logging_helpers import setup_logging, StdoutRedirector
 
@@ -71,9 +71,6 @@ from logging_helpers import setup_logging, StdoutRedirector
 # Logging setup
 # ---------------------------------------------------------------------------
 logger = setup_logging()
-
-# Backward-compatible aliases for test imports
-get_estimated_scenario_count = get_estimated_matching_count
 
 
 # ---------------------------------------------------------------------------
@@ -106,19 +103,6 @@ class KovaaksApp(tk.Tk):
         # Column visibility — ▶ and Scenario are always shown
         always_visible = {"▶", "Scenario"}
         saved = self._cfg.get("visible_columns", None)
-        # Migration: Rename 'New Entries / Day' or 'New Entries' to 'New Entries (24h)'
-        if saved:
-            new_saved = []
-            changed = False
-            for c in saved:
-                if c in ("New Entries / Day", "New Entries"):
-                    new_saved.append("New Entries (24h)")
-                    changed = True
-                else:
-                    new_saved.append(c)
-            if changed:
-                self._cfg["visible_columns"] = new_saved
-                saved = new_saved
 
         self._visible_cols: dict[str, tk.BooleanVar] = {}
         for col_name, _ in COLUMNS:
@@ -401,6 +385,7 @@ class KovaaksApp(tk.Tk):
             bg=ENTRY_BG, fg=TEXT, insertbackground=TEXT,
             font=("Segoe UI", 10), relief="flat", bd=4)
         filter_entry.pack(side="left", padx=(8, 0))
+        _bind_entry_ctrl_a(filter_entry)
         self._filter_var.trace_add("write", lambda *_a: self._apply_filter())
 
         count_label = ttk.Label(filter_frame, textvariable=self._count_var,
