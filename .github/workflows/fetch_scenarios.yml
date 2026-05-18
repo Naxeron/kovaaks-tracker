@@ -27,7 +27,7 @@ jobs:
         run: pip install requests
 
       - name: Fetch scenarios
-        run: python scripts/fetch_scenarios.py
+        run: python scripts/fetch_scenarios.py --min-entries 10
 
       - name: Commit and push changes
         run: |
