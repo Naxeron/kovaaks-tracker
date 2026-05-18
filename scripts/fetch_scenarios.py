@@ -44,7 +44,7 @@ def _get_accurate_entry_count(leaderboard_id, session=None):
         logger.debug(f"Failed to fetch accurate count for lid={leaderboard_id}: {e}")
     return None
 
-def fetch_all_scenarios(pages_limit=0, entries_limit=100):
+def fetch_all_scenarios(pages_limit=0, entries_limit=10):
     url = "https://kovaaks.com/webapp-backend/scenario/popular"
     all_data = []
     page = 0
