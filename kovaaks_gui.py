@@ -13,7 +13,6 @@ import sys
 import logging
 import threading
 import time
-import base64
 import datetime
 import math
 import urllib.parse
@@ -24,6 +23,46 @@ import io
 
 import requests
 import queue
+
+# ---------------------------------------------------------------------------
+# Extracted modules
+# ---------------------------------------------------------------------------
+from constants import (
+    BG, BG_DARKER, BG_LIGHTER, ACCENT, ACCENT_HOVER, TEXT, TEXT_DIM,
+    ENTRY_BG, TREE_BG, TREE_FG, TREE_SEL_BG, TREE_SEL_FG,
+    LOG_BG, LOG_FG, ALT_ROW, HEADER_BG, BORDER, GREEN, GREEN_HOVER,
+    COLUMNS, FILTER_HIDDEN_COLS, MIN_ENTRIES,
+    SCENARIO_DISTRIBUTION_POINTS, SCENARIO_POPULARITY_DROP_OFF_POINTS,
+    GITHUB_RAW_BASE, STEAM_LAUNCH_URI,
+    LAUNCH_MARKER as _LAUNCH_MARKER,
+)
+from api import (
+    api_request_with_retry as _api_request_with_retry,
+    KOVAAKS_HEADERS as _KOVAAKS_HEADERS,
+    get_accurate_entry_count as _get_accurate_entry_count,
+    kovaaks_login,
+    kovaaks_get_friends_scores,
+    fetch_all_scenarios,
+)
+from cache import (
+    load_scenarios_from_cache,
+    load_scores_cache,
+    save_scores_cache,
+    SCORES_CACHE,
+)
+from stats import get_local_stats as _get_local_stats
+from config_helpers import (
+    load_config,
+    save_config,
+    get_default_stats_dir,
+    CONFIG_PATH,
+)
+from data_processing import (
+    get_estimated_fetch_count,
+    get_estimated_matching_count,
+    natural_sort_key,
+    parse_leaderboard_entries,
+)
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -38,68 +77,11 @@ _console_handler.setFormatter(logging.Formatter(
 logger.addHandler(_console_handler)
 
 # ---------------------------------------------------------------------------
-# Paths & constants
+# Paths
 # ---------------------------------------------------------------------------
-SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH  = os.path.join(SCRIPT_DIR, "config.json")
-SCORES_CACHE = os.path.join(SCRIPT_DIR, "scores_cache.json.gz")
-LOG_FILE     = os.path.join(SCRIPT_DIR, "kovaaks.log")
-MIN_ENTRIES  = 1000
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE   = os.path.join(SCRIPT_DIR, "kovaaks.log")
 
-# Distribution of scenarios by entry count (actual count of scenarios with >= X entries)
-SCENARIO_DISTRIBUTION_POINTS = [
-    (0, 18000), (10, 17953), (50, 17420), (100, 13772), 
-    (500, 6639), (1000, 4852), (2000, 3458), (5000, 1960), 
-    (10000, 1162), (100000, 0)
-]
-
-# Estimated number of items to fetch from the 'popular' endpoint 
-# until the entry count drops consistently below X.
-# This curve is different because popularity != entry count.
-SCENARIO_POPULARITY_DROP_OFF_POINTS = [
-    (0, 18000), (10, 17500), (50, 15000), (100, 12000), 
-    (500, 9000), (1000, 6500), (2000, 5000), (5000, 3500), 
-    (10000, 2000), (20000, 1000), (50000, 400), (100000, 0)
-]
-
-def get_estimated_fetch_count(min_entries):
-    """Estimate how many items we need to pull from the 'popular' API 
-    before hitting the min_entries threshold.
-    """
-    m = min_entries
-    if m <= 0: return SCENARIO_POPULARITY_DROP_OFF_POINTS[0][1]
-    if m >= SCENARIO_POPULARITY_DROP_OFF_POINTS[-1][0]: return 0
-    
-    for i in range(len(SCENARIO_POPULARITY_DROP_OFF_POINTS)-1):
-        x1, y1 = SCENARIO_POPULARITY_DROP_OFF_POINTS[i]
-        x2, y2 = SCENARIO_POPULARITY_DROP_OFF_POINTS[i+1]
-        if x1 <= m <= x2:
-            ratio = (m - x1) / (x2 - x1)
-            return y1 - ratio * (y1 - y2)
-    return 0
-
-def get_estimated_matching_count(min_entries):
-    """Estimate how many scenarios will actually match the min_entries threshold."""
-    m = min_entries
-    if m <= 0: return SCENARIO_DISTRIBUTION_POINTS[0][1]
-    if m >= SCENARIO_DISTRIBUTION_POINTS[-1][0]: return 0
-    
-    for i in range(len(SCENARIO_DISTRIBUTION_POINTS)-1):
-        x1, y1 = SCENARIO_DISTRIBUTION_POINTS[i]
-        x2, y2 = SCENARIO_DISTRIBUTION_POINTS[i+1]
-        if x1 <= m <= x2:
-            ratio = (m - x1) / (x2 - x1)
-            return y1 - ratio * (y1 - y2)
-    return 0
-
-def get_default_stats_dir():
-    if sys.platform == "win32":
-        return r"C:\Program Files (x86)\Steam\steamapps\common\FPSAimTrainer\FPSAimTrainer\stats"
-    else:
-        return os.path.expanduser("~/.local/share/Steam/steamapps/common/FPSAimTrainer/FPSAimTrainer/stats/")
-
-# Session-based log trimming: keep at most 2 previous launches
-_LAUNCH_MARKER = "=" * 60 + " LAUNCH " + "=" * 60
 
 def _trim_log_file(path, keep=2):
     """Trim the log file to only keep the last *keep* launch sessions."""
@@ -130,312 +112,10 @@ logger.addHandler(_file_handler)
 # Write the launch marker so future trims know where this session starts
 logger.info(_LAUNCH_MARKER)
 
-# ---------------------------------------------------------------------------
-# KovaaKs API helpers
-# ---------------------------------------------------------------------------
-
-def _api_request_with_retry(method, url, timeout=30, max_retries=999, session=None, **kwargs):
-    """Make an HTTP request with retry on timeouts/5xx and exponential backoff."""
-    req_func = getattr(session, method.lower()) if session else getattr(requests, method.lower())
-    for attempt in range(max_retries + 1):
-        try:
-            resp = req_func(url, timeout=timeout, **kwargs)
-            if resp.status_code < 500 or attempt == max_retries:
-                resp.raise_for_status()
-                if attempt > 0:
-                    logger.info("Recovered %s %s after %d retries", method.upper(), url, attempt)
-                return resp
-        except (requests.exceptions.RequestException, requests.exceptions.Timeout) as e:
-            if hasattr(e, "response") and e.response is not None:
-                if 400 <= e.response.status_code < 500 and e.response.status_code != 429:
-                    raise
-            if attempt == max_retries:
-                raise
-            logger.warning("Connection error %s, retrying %d/%d...", e, attempt + 1, max_retries)
-        
-        wait = min(60, 2 ** (attempt + 1))
-        logger.warning("Server error/timeout, retrying in %ds…", wait)
-        time.sleep(wait)
-    return None
 
 
-def _get_accurate_entry_count(leaderboard_id, session=None):
-    """Fetch the accurate 'total' entries from the global leaderboard endpoint."""
-    url = "https://kovaaks.com/webapp-backend/leaderboard/scores/global"
-    params = {"leaderboardId": leaderboard_id, "page": 0, "max": 1}
-    try:
-        # Use retry logic for individual leaderboard requests too
-        resp = _api_request_with_retry("get", url, params=params, timeout=15, max_retries=10, session=session)
-        if resp:
-            data = resp.json()
-            return int(data.get("total", 0))
-    except Exception as e:
-        logger.debug("Failed to fetch accurate count for lid=%s: %s", leaderboard_id, e)
-    return None
-
-
-def _get_local_stats(stats_dir):
-    """Extract local scenario stats (counts, recency, trends) from the Steam stats directory."""
-    stats = {}
-    if not os.path.exists(stats_dir):
-        logger.warning("Stats directory not found: %s", stats_dir)
-        return stats
-
-    try:
-        now_dt = datetime.datetime.now()
-        filenames = os.listdir(stats_dir)
-        # Sort filenames by date (descending) so we process most recent first
-        # Pattern: ... - 2026.01.11-15.13.08 Stats.csv
-        # We can just sort the strings since they are in YYYY.MM.DD format at the end
-        filenames.sort(reverse=True)
-
-        for fname in filenames:
-            if fname.endswith(" Stats.csv"):
-                # Pattern: [Scenario Name] - [Mode] - [Date] Stats.csv
-                base = fname[:-10]
-                parts = base.rsplit(" - ", 2)
-                if len(parts) >= 3:
-                    sname = parts[0]
-                    date_str = parts[2]
-                    try:
-                        dt = datetime.datetime.strptime(date_str, "%Y.%m.%d-%H.%M.%S")
-                    except ValueError:
-                        continue
-                    
-                    if sname not in stats:
-                        stats[sname] = {"count": 0, "last_played": dt, "recent_scores": [], "runs_today": 0}
-                    
-                    stats[sname]["count"] += 1
-                    
-                    if (now_dt - dt).total_seconds() < 86400:
-                        stats[sname]["runs_today"] += 1
-                    if dt > stats[sname]["last_played"]:
-                        stats[sname]["last_played"] = dt
-                    
-                    # Store most recent scores for trend (already sorted by filenames.sort)
-                    if len(stats[sname]["recent_scores"]) < 10:
-                        fpath = os.path.join(stats_dir, fname)
-                        try:
-                            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-                                for line in f:
-                                    if line.startswith("Score:,"):
-                                        score_val = float(line.split(",")[1])
-                                        stats[sname]["recent_scores"].append((dt, score_val))
-                                        break
-                        except Exception:
-                            pass
-
-        # Calculate trends
-        for sname, data in stats.items():
-            # filenames were reversed, so scores are newest first. Reverse back for trend.
-            scores = sorted(data["recent_scores"], key=lambda x: x[0])
-            if len(scores) >= 2:
-                changes = [scores[i][1] - scores[i-1][1] for i in range(1, len(scores))]
-                avg_change = sum(changes) / len(changes)
-                max_score = max(s[1] for s in scores)
-                
-                runs_since_pb = 0
-                for i in range(len(scores)-1, -1, -1):
-                    if scores[i][1] == max_score:
-                        runs_since_pb = len(scores) - 1 - i
-                        break
-                if runs_since_pb == len(scores) - 1:
-                    runs_since_pb = 999
-                data["runs_since_recent_pb"] = runs_since_pb
-
-                if max_score > 1.0: # avoid division by zero or tiny scores
-                    # Trend factor: 1.0 is neutral. 
-                    # If improving by 1% of max score per run, factor is 1.05
-                    data["trend"] = max(0.5, min(2.0, 1.0 + (avg_change / max_score) * 5.0))
-                else:
-                    data["trend"] = 1.0
-            else:
-                data["trend"] = 1.0
-                data["runs_since_recent_pb"] = 0
-            del data["recent_scores"]
-
-    except Exception as e:
-        logger.error("Error reading local stats: %s", e)
-
-    return stats
-
-
-def get_estimated_scenario_count(min_entries):
-    """Estimate the number of scenarios that will be fetched based on min_entries threshold."""
-    m = min_entries
-    if m <= 0: return SCENARIO_DISTRIBUTION_POINTS[0][1]
-    if m >= SCENARIO_DISTRIBUTION_POINTS[-1][0]: return 0
-    
-    for i in range(len(SCENARIO_DISTRIBUTION_POINTS)-1):
-        x1, y1 = SCENARIO_DISTRIBUTION_POINTS[i]
-        x2, y2 = SCENARIO_DISTRIBUTION_POINTS[i+1]
-        if x1 <= m <= x2:
-            ratio = (m - x1) / (x2 - x1)
-            return y1 - ratio * (y1 - y2)
-    return 0
-
-
-def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
-    """Fetch scenarios from the KovaaKs API (paginated, sorted by popularity).
-    Stops early when all items on a page fall below *min_entries*.
-    """
-    url = "https://kovaaks.com/webapp-backend/scenario/popular"
-    all_data = []
-    page = 0
-    
-    # Estimate total to provide better progress/ETA
-    est_total = get_estimated_fetch_count(min_entries)
-    start_time = time.time()
-
-    while True:
-        logger.debug("Fetching all scenarios page %d", page)
-        params = {"page": page, "max": 100}
-        resp = _api_request_with_retry("get", url, params=params, session=session)
-        data = resp.json()
-        items = data.get("data", [])
-        if not items:
-            break
-
-        # Fetch accurate entry counts in parallel for the current page
-        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-            future_to_item = {
-                executor.submit(_get_accurate_entry_count, it.get("leaderboardId"), session): it
-                for it in items
-            }
-            for future in concurrent.futures.as_completed(future_to_item):
-                item = future_to_item[future]
-                accurate_count = future.result()
-                if accurate_count is not None:
-                    # Update both the top-level counts and any nested scenario counts
-                    if "counts" not in item:
-                        item["counts"] = {}
-                    item["counts"]["entries"] = accurate_count
-                    if "scenario" in item and "counts" in item["scenario"]:
-                        item["scenario"]["counts"]["entries"] = accurate_count
-
-        all_data.extend(items)
-        
-        # Report progress
-        if progress_callback:
-            done = len(all_data)
-            # Calculate ETA for scenario list fetching
-            elapsed = time.time() - start_time
-            if done > 0:
-                rate = done / elapsed
-                rem_est = max(0, est_total - done)
-                eta_s = rem_est / rate
-                mins, secs = divmod(int(eta_s), 60)
-                eta_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
-                
-                status_msg = f"Fetching scenarios… {done}/{int(est_total)} — ETA {eta_str}"
-                progress_callback(done, est_total, status_msg)
-
-        # Early stop: API returns by descending popularity
-        if min_entries > 0:
-            max_on_page = max(
-                (int(it.get("counts", {}).get("entries", 0)) for it in items),
-                default=0,
-            )
-            if max_on_page < min_entries:
-                logger.info("Stopping at page %d — max entries %d < %d",
-                            page, max_on_page, min_entries)
-                break
-
-        total = data.get("total", 0)
-        page += 1
-        if len(all_data) >= total:
-            break
-        time.sleep(0.1)
-
-    logger.info("Fetched %d total scenarios with accurate counts", len(all_data))
-    return all_data
-
-
-def load_scenarios_from_cache(cache):
-    """Extract cached scenario list from the unified cache dict."""
-    scenarios = cache.get("scenarios", [])
-    if scenarios:
-        logger.debug("Loaded %d scenarios from JSON cache", len(scenarios))
-    return scenarios
-
-# ---------------------------------------------------------------------------
-# Color palette
-# ---------------------------------------------------------------------------
-BG          = "#1a1a2e"
-BG_DARKER   = "#16162a"
-BG_LIGHTER  = "#222240"
-ACCENT      = "#e94560"
-ACCENT_HOVER= "#ff6b81"
-TEXT        = "#eaeaea"
-TEXT_DIM    = "#999"
-ENTRY_BG    = "#2a2a4a"
-TREE_BG     = "#1e1e38"
-TREE_FG     = "#dcdcdc"
-TREE_SEL_BG = "#e94560"
-TREE_SEL_FG = "#ffffff"
-LOG_BG      = "#12122a"
-LOG_FG      = "#8888aa"
-ALT_ROW     = "#24243e"
-HEADER_BG   = "#2e2e50"
-BORDER      = "#3a3a5c"
-GREEN       = "#2ecc71"
-GREEN_HOVER = "#27ae60"
-
-# Steam launch URI for KovaaKs (App ID 824270)
-STEAM_LAUNCH_URI = "steam://run/824270/?action=jump-to-scenario;name={}"
-
-# ---------------------------------------------------------------------------
-# Column definitions
-# ---------------------------------------------------------------------------
-COLUMNS = [
-    ("▶", 32),
-    ("Scenario", 240),
-    ("Entry Count", 80),
-    ("New Entries (24h)", 120),
-    ("Trend Mult", 80),
-    ("My Rank", 70),
-    ("My Score", 85),
-    ("Percentile", 80),
-    ("Score Date", 95),
-    ("Best Friend", 130),
-    ("Friend Rank", 80),
-    ("Friend Score", 90),
-    ("Friend Percentile", 95),
-    ("Friend Score Date", 105),
-    ("Rank Diff", 80),
-    ("Pctile Diff", 80),
-    ("Local Runs", 80),
-    ("Potential", 70),
-]
-
-# Columns to auto-hide when a specific filter is active
-FILTER_HIDDEN_COLS = {
-    "friends_only": {"My Rank", "My Score", "Percentile", "Score Date",
-                     "Rank Diff", "Pctile Diff"},
-    "me_only":      {"Best Friend", "Friend Rank", "Friend Score",
-                     "Friend Percentile", "Friend Score Date",
-                     "Rank Diff", "Pctile Diff"},
-    "unplayed":     {"My Rank", "My Score", "Percentile", "Score Date",
-                     "Best Friend", "Friend Rank", "Friend Score",
-                     "Friend Percentile", "Friend Score Date",
-                     "Rank Diff", "Pctile Diff", "Local Runs", "Potential"},
-}
-
-# ---------------------------------------------------------------------------
-# Config helpers
-# ---------------------------------------------------------------------------
-
-def load_config():
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_config(cfg):
-    # Don't save the password to disk
-    filtered_cfg = {k: v for k, v in cfg.items() if k != "password"}
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(filtered_cfg, f, indent=2)
+# Backward-compatible aliases for test imports
+get_estimated_scenario_count = get_estimated_matching_count
 
 
 # ---------------------------------------------------------------------------
@@ -459,73 +139,6 @@ class StdoutRedirector:
     def flush(self):
         if self._original:
             self._original.flush()
-
-
-# ---------------------------------------------------------------------------
-# KovaaKs API helpers
-# ---------------------------------------------------------------------------
-
-_KOVAAKS_HEADERS = {
-    "Origin": "https://kovaaks.com",
-    "Referer": "https://kovaaks.com/",
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
-    "Accept": "*/*",
-}
-
-
-def kovaaks_login(username, password):
-    """Login to KovaaKs webapp, return JWT token string."""
-    logger.debug("Logging in to KovaaKs as '%s'", username)
-    url = "https://kovaaks.com/auth/webapp/login"
-    credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
-    headers = {**_KOVAAKS_HEADERS, "Authorization": f"Basic {credentials}"}
-    resp = _api_request_with_retry("post", url, headers=headers, data="", timeout=15)
-
-    data = resp.json()
-    auth = data.get("auth", {})
-    logger.debug("Login auth keys: %s", list(auth.keys()) if isinstance(auth, dict) else type(auth))
-
-    if isinstance(auth, dict):
-        for key in ("jwt", "token", "access_token", "firebaseJWT"):
-            token = auth.get(key)
-            if token and isinstance(token, str) and token.startswith("eyJ"):
-                logger.info("Login successful (token from auth.%s, len=%d)", key, len(token))
-                return token
-
-    raise ValueError(f"Could not find JWT in login response. Keys: {list(data.keys())}")
-
-
-def kovaaks_get_friends_scores(token, leaderboard_id, session=None):
-    """Fetch friends' scores for a given leaderboard ID."""
-    url = "https://kovaaks.com/webapp-backend/leaderboard/scores/friends"
-    headers = {**_KOVAAKS_HEADERS, "Authorization": f"Bearer {token}"}
-    resp = _api_request_with_retry("get", url, params={
-        "leaderboardId": leaderboard_id,
-        "page": 0,
-        "max": 50,
-    }, headers=headers, timeout=30, session=session)
-    return resp.json().get("data", [])
-
-
-
-
-
-def natural_sort_key(val):
-    s = str(val).strip()
-    if not s:
-        return (2, "")
-    # Try to clean up numeric strings like "1,234" or "-47.20%"
-    clean = s.replace(",", "")
-    if clean.endswith("%"):
-        clean = clean[:-1]
-    
-    try:
-        return (0, float(clean))
-    except (ValueError, TypeError):
-        return (1, s.lower())
 
 
 # ---------------------------------------------------------------------------
@@ -877,6 +490,13 @@ class KovaaksApp(tk.Tk):
         self._global_points_sum = 0
         self._global_potential_points_sum = 0
 
+        # Thread safety: lock for shared data structures
+        self._data_lock = threading.Lock()
+
+        # Local stats cache to avoid re-scanning disk every rebuild
+        self._local_stats_cache: dict = {}
+        self._local_stats_dirty: bool = True
+
         # Autoplay state
         self._autoplay_var = tk.BooleanVar(value=False)
         self._autoplay_current_scenario: str | None = None
@@ -938,8 +558,8 @@ class KovaaksApp(tk.Tk):
     def _check_github_updates(self):
         """Lightweight check to see if GitHub files have changed via ETags/Last-Modified."""
         urls = [
-            "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios.json.gz",
-            "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios_history.json.gz"
+            f"{GITHUB_RAW_BASE}/scenarios.json.gz",
+            f"{GITHUB_RAW_BASE}/scenarios_history.json.gz"
         ]
         
         last_etags = self._cfg.get("last_etags", {})
@@ -1021,11 +641,7 @@ class KovaaksApp(tk.Tk):
                         "counts": {"entries": info.get("entries", 0)}
                     })
                 self._record_history_points(fake_master)
-                try:
-                    with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
-                        json.dump(self._scores_cache, f, separators=(",", ":"))
-                except OSError:
-                    pass
+                save_scores_cache(self._scores_cache)
             self._update_status("Ready (GitHub up-to-date)")
             self._schedule_next_auto_refresh()
         else:
@@ -1365,11 +981,22 @@ class KovaaksApp(tk.Tk):
         if not children:
             return
 
+        # Sample a subset of rows for performance (first, last, and evenly spaced)
+        n = len(children)
+        if n <= 200:
+            sample = children
+        else:
+            step = max(1, n // 100)
+            indices = set(range(0, n, step))
+            indices.add(0)
+            indices.add(n - 1)
+            sample = [children[i] for i in sorted(indices)]
+
         for col_name, default_width in COLUMNS:
             if col_name == "▶":
                 continue
             longest = ""
-            for iid in children:
+            for iid in sample:
                 val = str(tree.set(iid, col_name))
                 if len(val) > len(longest):
                     longest = val
@@ -1439,14 +1066,7 @@ class KovaaksApp(tk.Tk):
     # -------------------------------------------------------------------
     def _load_cache_and_populate(self):
         """Load the unified JSON cache and populate tabs with cached data."""
-        self._scores_cache = {}
-        if os.path.exists(SCORES_CACHE):
-            try:
-                with gzip.open(SCORES_CACHE, "rt", encoding="utf-8") as f:
-                    self._scores_cache = json.load(f)
-                logger.info("Loaded cache from %s", SCORES_CACHE)
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning("Could not load cache: %s", e)
+        self._scores_cache = load_scores_cache()
 
         all_scenarios = load_scenarios_from_cache(self._scores_cache)
         if not all_scenarios:
@@ -1616,8 +1236,9 @@ class KovaaksApp(tk.Tk):
             unplayed = self._filters["unplayed"].get()
 
             if losing or friends_only or me_only or unplayed:
-                filtered = []
-                for r in all_rows:
+                # Set-based accumulation: each active filter adds its matches
+                matched = set()
+                for idx, r in enumerate(all_rows):
                     has_rank = r.get("My Rank", "") != ""
                     has_friend = r.get("Best Friend", "") != ""
                     rank_diff = r.get("Rank Diff", "")
@@ -1625,20 +1246,16 @@ class KovaaksApp(tk.Tk):
                     if losing and has_rank and has_friend and rank_diff:
                         try:
                             if int(rank_diff) > 0:
-                                filtered.append(r)
+                                matched.add(idx)
                         except (ValueError, TypeError):
                             pass
-                        continue
                     if friends_only and has_friend and not has_rank:
-                        filtered.append(r)
-                        continue
+                        matched.add(idx)
                     if me_only and has_rank and not has_friend:
-                        filtered.append(r)
-                        continue
+                        matched.add(idx)
                     if unplayed and not has_rank and not has_friend:
-                        filtered.append(r)
-                        continue
-                all_rows = filtered
+                        matched.add(idx)
+                all_rows = [all_rows[i] for i in sorted(matched)]
 
         if query:
             all_rows = [r for r in all_rows if any(
@@ -1725,7 +1342,7 @@ class KovaaksApp(tk.Tk):
             min_entries_threshold = int(self._cfg.get("min_entries", MIN_ENTRIES))
             
             all_scenarios = None
-            repo_url = "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios.json.gz"
+            repo_url = f"{GITHUB_RAW_BASE}/scenarios.json.gz"
             
             try:
                 logger.info("Attempting to fetch scenarios from GitHub repo: %s", repo_url)
@@ -1752,7 +1369,7 @@ class KovaaksApp(tk.Tk):
                 logger.warning("Failed to fetch scenarios from GitHub: %s", e)
 
             # ── Step 1b: Fetch scenario history from GitHub ──
-            history_url = "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/scenarios_history.json.gz"
+            history_url = f"{GITHUB_RAW_BASE}/scenarios_history.json.gz"
             try:
                 logger.info("Attempting to fetch history from GitHub: %s", history_url)
                 resp = _api_request_with_retry("get", history_url, timeout=30)
@@ -1815,12 +1432,8 @@ class KovaaksApp(tk.Tk):
                 self._update_progress(0.4, 1.0)
 
             # SAVE CACHE IMMEDIATELY after public data is fetched
-            try:
-                with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
-                    json.dump(scores_cache, f, separators=(",", ":"))
-                logger.info("Saved GitHub/API scenarios and history to local cache")
-            except OSError as e:
-                logger.warning("Could not save initial cache: %s", e)
+            save_scores_cache(scores_cache)
+            logger.info("Saved GitHub/API scenarios and history to local cache")
 
             # Filter to min_entries_threshold
             master = []
@@ -1911,16 +1524,12 @@ class KovaaksApp(tk.Tk):
 
             def _save_cache():
                 """Save unified cache to disk (call under lock)."""
-                try:
-                    unified = {
-                        "scenarios": scores_cache.get("scenarios", []),
-                        "scores": scores_data,
-                        "entry_history": scores_cache.get("entry_history", {}),
-                    }
-                    with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
-                        json.dump(unified, f, separators=(",", ":"))
-                except OSError as e:
-                    logger.debug("Cache save error: %s", e)
+                unified = {
+                    "scenarios": scores_cache.get("scenarios", []),
+                    "scores": scores_data,
+                    "entry_history": scores_cache.get("entry_history", {}),
+                }
+                save_scores_cache(unified)
 
             def _fetch_one(lid, session):
                 nonlocal errors, completed, session_expired
@@ -1946,41 +1555,7 @@ class KovaaksApp(tk.Tk):
                 if data is None:
                     return
 
-                friend_entries = []
-                user_entry = None
-                for entry in data:
-                    name = entry.get("webappUsername") or entry.get("steamAccountName", "")
-                    if name.lower() == username.lower():
-                        epoch = entry.get("attributes", {}).get("epoch", "")
-                        score_date = ""
-                        if epoch:
-                            try:
-                                score_date = datetime.datetime.fromtimestamp(
-                                    int(epoch) / 1000
-                                ).strftime("%Y-%m-%d")
-                            except (ValueError, TypeError, OSError):
-                                pass
-                        user_entry = {
-                            "rank": entry.get("rank", ""),
-                            "score": entry.get("score", ""),
-                            "date": score_date,
-                        }
-                    else:
-                        f_epoch = entry.get("attributes", {}).get("epoch", "")
-                        f_date = ""
-                        if f_epoch:
-                            try:
-                                f_date = datetime.datetime.fromtimestamp(
-                                    int(f_epoch) / 1000
-                                ).strftime("%Y-%m-%d")
-                            except (ValueError, TypeError, OSError):
-                                pass
-                        friend_entries.append({
-                            "friend": name,
-                            "rank": entry.get("rank", ""),
-                            "score": entry.get("score", ""),
-                            "date": f_date,
-                        })
+                user_entry, friend_entries = parse_leaderboard_entries(data, username)
 
                 with lock:
                     cache_entry = {}
@@ -2073,7 +1648,11 @@ class KovaaksApp(tk.Tk):
         self._global_potential_points_sum = 0
 
         stats_dir = self._get_stats_dir()
-        local_stats = _get_local_stats(stats_dir)
+        # Use cached local stats unless marked dirty
+        if self._local_stats_dirty:
+            self._local_stats_cache = _get_local_stats(stats_dir)
+            self._local_stats_dirty = False
+        local_stats = self._local_stats_cache
         now = datetime.datetime.now()
         entry_history = self._scores_cache.get("entry_history", {})
 
@@ -2474,6 +2053,7 @@ class KovaaksApp(tk.Tk):
             new_files = current_files - self._known_stat_files
             if new_files:
                 self._known_stat_files.update(new_files)
+                self._local_stats_dirty = True
                 threading.Thread(target=self._handle_new_stats_files, args=(stats_dir, new_files,), daemon=True).start()
         except OSError:
             pass
@@ -2553,43 +2133,11 @@ class KovaaksApp(tk.Tk):
                 try:
                     data = kovaaks_get_friends_scores(self._jwt_token, lid, session=session)
                     
-                    friend_entries = []
-                    user_entry = None
                     username = self._cfg.get("username", "").strip()
-                    
-                    all_names = []
-                    for entry in data:
-                        name = entry.get("webappUsername") or entry.get("steamAccountName", "")
-                        all_names.append(name)
-                        if name.lower() == username.lower():
-                            epoch = entry.get("attributes", {}).get("epoch", "")
-                            score_date = ""
-                            if epoch:
-                                try:
-                                    score_date = datetime.datetime.fromtimestamp(int(epoch) / 1000).strftime("%Y-%m-%d")
-                                except (ValueError, TypeError, OSError):
-                                    pass
-                            user_entry = {
-                                "rank": entry.get("rank", ""),
-                                "score": entry.get("score", ""),
-                                "date": score_date,
-                            }
-                        else:
-                            f_epoch = entry.get("attributes", {}).get("epoch", "")
-                            f_date = ""
-                            if f_epoch:
-                                try:
-                                    f_date = datetime.datetime.fromtimestamp(int(f_epoch) / 1000).strftime("%Y-%m-%d")
-                                except (ValueError, TypeError, OSError):
-                                    pass
-                            friend_entries.append({
-                                "friend": name,
-                                "rank": entry.get("rank", ""),
-                                "score": entry.get("score", ""),
-                                "date": f_date,
-                            })
+                    user_entry, friend_entries = parse_leaderboard_entries(data, username)
                     
                     if not user_entry and data:
+                        all_names = [entry.get("webappUsername") or entry.get("steamAccountName", "") for entry in data]
                         logger.debug("Auto-sync: User '%s' not found in leaderboard data for lid=%s. Candidates: %s", 
                                      username, lid, all_names[:5])
                     
@@ -2630,7 +2178,7 @@ class KovaaksApp(tk.Tk):
                         logger.debug("Score for lid=%s not updated yet in API, retrying (%d/%d)...", lid, attempt+1, max_attempts)
                         time.sleep(4)
                 except Exception as e:
-                    if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 401:
+                    if isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 401:
                         logger.warning("Session expired during auto-update. Attempting re-login.")
                         self._jwt_token = None
                         if username and password:
@@ -2645,11 +2193,7 @@ class KovaaksApp(tk.Tk):
                     time.sleep(4)
                 
         if updated:
-            try:
-                with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
-                    json.dump(self._scores_cache, f, separators=(",", ":"))
-            except OSError:
-                pass
+            save_scores_cache(self._scores_cache)
         
         # Always rebuild at the end to ensure UI is in sync even if API fetch failed
         self.run_in_gui_thread(self._rebuild_data)
@@ -2798,7 +2342,7 @@ class KovaaksApp(tk.Tk):
                     
             history[lid][now_str] = entries
             # Prune to last 168 records (7 days)
-            if len(history[lid]) > 168:
+            while len(history[lid]) > 168:
                 oldest_key = min(history[lid].keys())
                 del history[lid][oldest_key]
         self._scores_cache["entry_history"] = history

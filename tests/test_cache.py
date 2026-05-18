@@ -6,7 +6,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kovaaks_gui import load_scenarios_from_cache
+from cache import load_scenarios_from_cache
 
 
 class TestLoadScenariosFromCache:

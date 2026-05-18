@@ -14,25 +14,25 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
-from scripts.fetch_scenarios import (
-    _api_request_with_retry as script_retry,
-    _get_accurate_entry_count as script_entry_count,
-    fetch_all_scenarios as script_fetch_all,
+from api import (
+    api_request_with_retry,
+    get_accurate_entry_count,
 )
+from scripts.fetch_scenarios import fetch_all_scenarios as script_fetch_all
 
 
-class TestScriptApiRetry:
-    @patch("scripts.fetch_scenarios.requests.get")
+class TestApiRetryFromModule:
+    @patch("api.requests.get")
     def test_success(self, mock_get):
         resp = MagicMock()
         resp.status_code = 200
         resp.raise_for_status = MagicMock()
         mock_get.return_value = resp
-        result = script_retry("get", "http://example.com", max_retries=1)
+        result = api_request_with_retry("get", "http://example.com", max_retries=1)
         assert result.status_code == 200
 
-    @patch("scripts.fetch_scenarios.time.sleep")
-    @patch("scripts.fetch_scenarios.requests.get")
+    @patch("api.time.sleep")
+    @patch("api.requests.get")
     def test_retry_on_connection_error(self, mock_get, mock_sleep):
         import requests as req
         ok_resp = MagicMock()
@@ -42,27 +42,27 @@ class TestScriptApiRetry:
             req.exceptions.ConnectionError("fail"),
             ok_resp,
         ]
-        result = script_retry("get", "http://example.com", max_retries=2)
+        result = api_request_with_retry("get", "http://example.com", max_retries=2)
         assert result.status_code == 200
 
 
-class TestScriptEntryCount:
-    @patch("scripts.fetch_scenarios._api_request_with_retry")
+class TestEntryCountFromModule:
+    @patch("api.api_request_with_retry")
     def test_returns_count(self, mock_req):
         resp = MagicMock()
         resp.json.return_value = {"total": 7777}
         mock_req.return_value = resp
-        assert script_entry_count("lid-test") == 7777
+        assert get_accurate_entry_count("lid-test") == 7777
 
-    @patch("scripts.fetch_scenarios._api_request_with_retry")
+    @patch("api.api_request_with_retry")
     def test_returns_none_on_error(self, mock_req):
         mock_req.side_effect = Exception("boom")
-        assert script_entry_count("lid-fail") is None
+        assert get_accurate_entry_count("lid-fail") is None
 
 
 class TestScriptFetchAll:
-    @patch("scripts.fetch_scenarios._get_accurate_entry_count")
-    @patch("scripts.fetch_scenarios._api_request_with_retry")
+    @patch("scripts.fetch_scenarios.get_accurate_entry_count")
+    @patch("scripts.fetch_scenarios.api_request_with_retry")
     @patch("scripts.fetch_scenarios.time.sleep")
     def test_fetches_single_page(self, mock_sleep, mock_req, mock_count):
         page_data = {
@@ -82,8 +82,8 @@ class TestScriptFetchAll:
         result = script_fetch_all(pages_limit=1, entries_limit=100)
         assert len(result) == 2
 
-    @patch("scripts.fetch_scenarios._get_accurate_entry_count")
-    @patch("scripts.fetch_scenarios._api_request_with_retry")
+    @patch("scripts.fetch_scenarios.get_accurate_entry_count")
+    @patch("scripts.fetch_scenarios.api_request_with_retry")
     @patch("scripts.fetch_scenarios.time.sleep")
     def test_stops_on_empty_page(self, mock_sleep, mock_req, mock_count):
         page1 = MagicMock()

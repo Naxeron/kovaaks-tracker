@@ -1,5 +1,5 @@
 """
-Tests for _api_request_with_retry network helper and API functions.
+Tests for api_request_with_retry network helper and API functions.
 """
 import sys
 import os
@@ -11,16 +11,16 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kovaaks_gui import (
-    _api_request_with_retry,
-    _get_accurate_entry_count,
+from api import (
+    api_request_with_retry,
+    get_accurate_entry_count,
     kovaaks_login,
     kovaaks_get_friends_scores,
 )
 
 
 # ---------------------------------------------------------------------------
-# _api_request_with_retry
+# api_request_with_retry
 # ---------------------------------------------------------------------------
 
 class TestApiRequestWithRetry:
@@ -34,104 +34,104 @@ class TestApiRequestWithRetry:
         )
         return resp
 
-    @patch("kovaaks_gui.requests.get")
+    @patch("api.requests.get")
     def test_success_on_first_try(self, mock_get):
         mock_get.return_value = self._mock_response(200, {"ok": True})
-        result = _api_request_with_retry("get", "http://example.com", max_retries=3)
+        result = api_request_with_retry("get", "http://example.com", max_retries=3)
         assert result.status_code == 200
         assert mock_get.call_count == 1
 
-    @patch("kovaaks_gui.time.sleep")
-    @patch("kovaaks_gui.requests.get")
+    @patch("api.time.sleep")
+    @patch("api.requests.get")
     def test_retries_on_500(self, mock_get, mock_sleep):
         """Should retry on 5xx errors."""
         fail_resp = self._mock_response(500)
         ok_resp = self._mock_response(200, {"ok": True})
         mock_get.side_effect = [fail_resp, ok_resp]
 
-        result = _api_request_with_retry("get", "http://example.com", max_retries=3)
+        result = api_request_with_retry("get", "http://example.com", max_retries=3)
         assert result.status_code == 200
         assert mock_get.call_count == 2
 
-    @patch("kovaaks_gui.requests.get")
+    @patch("api.requests.get")
     def test_raises_on_4xx_immediately(self, mock_get):
         """4xx errors (except 429) should not be retried."""
         mock_get.return_value = self._mock_response(403)
         with pytest.raises(requests.exceptions.HTTPError):
-            _api_request_with_retry("get", "http://example.com", max_retries=3)
+            api_request_with_retry("get", "http://example.com", max_retries=3)
         assert mock_get.call_count == 1
 
-    @patch("kovaaks_gui.time.sleep")
-    @patch("kovaaks_gui.requests.get")
+    @patch("api.time.sleep")
+    @patch("api.requests.get")
     def test_retries_on_connection_error(self, mock_get, mock_sleep):
         """Should retry on ConnectionError."""
         mock_get.side_effect = [
             requests.exceptions.ConnectionError("conn refused"),
             self._mock_response(200),
         ]
-        result = _api_request_with_retry("get", "http://example.com", max_retries=3)
+        result = api_request_with_retry("get", "http://example.com", max_retries=3)
         assert result.status_code == 200
         assert mock_get.call_count == 2
 
-    @patch("kovaaks_gui.time.sleep")
-    @patch("kovaaks_gui.requests.get")
+    @patch("api.time.sleep")
+    @patch("api.requests.get")
     def test_retries_on_timeout(self, mock_get, mock_sleep):
         mock_get.side_effect = [
             requests.exceptions.Timeout("timed out"),
             self._mock_response(200),
         ]
-        result = _api_request_with_retry("get", "http://example.com", max_retries=3)
+        result = api_request_with_retry("get", "http://example.com", max_retries=3)
         assert result.status_code == 200
 
-    @patch("kovaaks_gui.time.sleep")
-    @patch("kovaaks_gui.requests.get")
+    @patch("api.time.sleep")
+    @patch("api.requests.get")
     def test_max_retries_exhausted_raises(self, mock_get, mock_sleep):
         """After max_retries, the last exception should propagate."""
         mock_get.side_effect = requests.exceptions.ConnectionError("down")
         with pytest.raises(requests.exceptions.ConnectionError):
-            _api_request_with_retry("get", "http://example.com", max_retries=2)
+            api_request_with_retry("get", "http://example.com", max_retries=2)
         assert mock_get.call_count == 3  # initial + 2 retries
 
-    @patch("kovaaks_gui.requests.get")
+    @patch("api.requests.get")
     def test_uses_session_when_provided(self, mock_requests_get):
         session = MagicMock()
         session.get.return_value = self._mock_response(200)
-        _api_request_with_retry("get", "http://example.com", session=session)
+        api_request_with_retry("get", "http://example.com", session=session)
         session.get.assert_called_once()
         mock_requests_get.assert_not_called()
 
-    @patch("kovaaks_gui.time.sleep")
-    @patch("kovaaks_gui.requests.post")
+    @patch("api.time.sleep")
+    @patch("api.requests.post")
     def test_post_method(self, mock_post, mock_sleep):
         mock_post.return_value = self._mock_response(200)
-        result = _api_request_with_retry("post", "http://example.com", max_retries=1)
+        result = api_request_with_retry("post", "http://example.com", max_retries=1)
         assert result.status_code == 200
         mock_post.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# _get_accurate_entry_count
+# get_accurate_entry_count
 # ---------------------------------------------------------------------------
 
 class TestGetAccurateEntryCount:
-    @patch("kovaaks_gui._api_request_with_retry")
+    @patch("api.api_request_with_retry")
     def test_returns_count(self, mock_req):
         resp = MagicMock()
         resp.json.return_value = {"total": 5000}
         mock_req.return_value = resp
-        result = _get_accurate_entry_count("lid-123")
+        result = get_accurate_entry_count("lid-123")
         assert result == 5000
 
-    @patch("kovaaks_gui._api_request_with_retry")
+    @patch("api.api_request_with_retry")
     def test_returns_none_on_failure(self, mock_req):
         mock_req.side_effect = Exception("network error")
-        result = _get_accurate_entry_count("lid-bad")
+        result = get_accurate_entry_count("lid-bad")
         assert result is None
 
-    @patch("kovaaks_gui._api_request_with_retry")
+    @patch("api.api_request_with_retry")
     def test_returns_none_when_no_response(self, mock_req):
         mock_req.return_value = None
-        result = _get_accurate_entry_count("lid-none")
+        result = get_accurate_entry_count("lid-none")
         assert result is None
 
 
@@ -140,7 +140,7 @@ class TestGetAccurateEntryCount:
 # ---------------------------------------------------------------------------
 
 class TestKovaaksLogin:
-    @patch("kovaaks_gui._api_request_with_retry")
+    @patch("api.api_request_with_retry")
     def test_extracts_jwt(self, mock_req, mock_login_response):
         resp = MagicMock()
         resp.json.return_value = mock_login_response
@@ -148,7 +148,7 @@ class TestKovaaksLogin:
         token = kovaaks_login("user", "pass")
         assert token.startswith("eyJ")
 
-    @patch("kovaaks_gui._api_request_with_retry")
+    @patch("api.api_request_with_retry")
     def test_raises_on_missing_jwt(self, mock_req):
         resp = MagicMock()
         resp.json.return_value = {"auth": {"noJwt": "here"}}
@@ -162,7 +162,7 @@ class TestKovaaksLogin:
 # ---------------------------------------------------------------------------
 
 class TestKovaaksGetFriendsScores:
-    @patch("kovaaks_gui._api_request_with_retry")
+    @patch("api.api_request_with_retry")
     def test_returns_data_list(self, mock_req, mock_friends_response):
         resp = MagicMock()
         resp.json.return_value = {"data": mock_friends_response}

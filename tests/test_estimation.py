@@ -6,13 +6,17 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kovaaks_gui import (
+from data_processing import (
     get_estimated_fetch_count,
     get_estimated_matching_count,
-    get_estimated_scenario_count,
+)
+from constants import (
     SCENARIO_DISTRIBUTION_POINTS,
     SCENARIO_POPULARITY_DROP_OFF_POINTS,
 )
+
+# Alias used in kovaaks_gui.py — verify the pattern works
+get_estimated_scenario_count = get_estimated_matching_count
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +93,7 @@ class TestGetEstimatedMatchingCount:
 
 
 # ---------------------------------------------------------------------------
-# get_estimated_scenario_count (duplicate of matching count)
+# get_estimated_scenario_count (alias of matching count)
 # ---------------------------------------------------------------------------
 
 class TestGetEstimatedScenarioCount:

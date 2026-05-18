@@ -36,10 +36,14 @@ def _make_row(scenario, my_rank="", best_friend="", rank_diff="", **extra):
 
 def _apply_filter_logic(all_rows, losing=False, friends_only=False,
                         me_only=False, unplayed=False, query=""):
-    """Replicate the filter logic from KovaaksApp._apply_filter without GUI."""
+    """Replicate the filter logic from KovaaksApp._apply_filter without GUI.
+
+    Uses set-based accumulation: each active toggle adds matching row indices
+    to a set, then we take the union. This allows multiple filters to stack.
+    """
     if losing or friends_only or me_only or unplayed:
-        filtered = []
-        for r in all_rows:
+        matched = set()
+        for idx, r in enumerate(all_rows):
             has_rank = r.get("My Rank", "") != ""
             has_friend = r.get("Best Friend", "") != ""
             rank_diff = r.get("Rank Diff", "")
@@ -47,20 +51,16 @@ def _apply_filter_logic(all_rows, losing=False, friends_only=False,
             if losing and has_rank and has_friend and rank_diff:
                 try:
                     if int(rank_diff) > 0:
-                        filtered.append(r)
+                        matched.add(idx)
                 except (ValueError, TypeError):
                     pass
-                continue
             if friends_only and has_friend and not has_rank:
-                filtered.append(r)
-                continue
+                matched.add(idx)
             if me_only and has_rank and not has_friend:
-                filtered.append(r)
-                continue
+                matched.add(idx)
             if unplayed and not has_rank and not has_friend:
-                filtered.append(r)
-                continue
-        all_rows = filtered
+                matched.add(idx)
+        all_rows = [all_rows[i] for i in sorted(matched)]
 
     if query:
         query = query.lower()
@@ -145,3 +145,39 @@ class TestFilterLogic:
         rows = self._build_dataset()
         result = _apply_filter_logic(rows, query="nonexistent")
         assert len(result) == 0
+
+    # --- New tests for set-based accumulation ---
+
+    def test_combined_toggles_stack(self):
+        """Multiple toggle filters should return the UNION of matches."""
+        rows = self._build_dataset()
+        result = _apply_filter_logic(rows, me_only=True, unplayed=True)
+        assert len(result) == 3
+        names = {r["Scenario"] for r in result}
+        assert names == {"ScenD", "ScenE", "ScenF"}
+
+    def test_all_toggles_active(self):
+        """All toggles active should return the union of all categories."""
+        rows = self._build_dataset()
+        result = _apply_filter_logic(rows, losing=True, friends_only=True,
+                                     me_only=True, unplayed=True)
+        # ScenA (losing), ScenC (friends_only), ScenD (me_only), ScenE+F (unplayed)
+        # ScenB is winning so not matched by any toggle
+        assert len(result) == 5
+        excluded = {r["Scenario"] for r in result}
+        assert "ScenB" not in excluded
+
+    def test_losing_and_friends_only(self):
+        """Losing + Friends Only should return union."""
+        rows = self._build_dataset()
+        result = _apply_filter_logic(rows, losing=True, friends_only=True)
+        assert len(result) == 2
+        names = {r["Scenario"] for r in result}
+        assert names == {"ScenA", "ScenC"}
+
+    def test_order_preserved(self):
+        """Results should maintain original row order."""
+        rows = self._build_dataset()
+        result = _apply_filter_logic(rows, me_only=True, unplayed=True)
+        scenarios = [r["Scenario"] for r in result]
+        assert scenarios == ["ScenD", "ScenE", "ScenF"]

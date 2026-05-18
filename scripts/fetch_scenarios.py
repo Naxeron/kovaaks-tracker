@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-import requests
 import json
 import time
 import concurrent.futures
 import logging
 import os
+import sys
 import gzip
 import datetime
+
+import requests
+
+# Add parent directory to path for module imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from api import api_request_with_retry, get_accurate_entry_count
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -15,34 +21,6 @@ logger = logging.getLogger("fetch_scenarios")
 SCENARIOS_JSON = "scenarios.json.gz"
 SCENARIOS_HISTORY_JSON = "scenarios_history.json.gz"
 
-def _api_request_with_retry(method, url, timeout=30, max_retries=5, session=None, **kwargs):
-    req_func = getattr(session, method.lower()) if session else getattr(requests, method.lower())
-    for attempt in range(max_retries + 1):
-        try:
-            resp = req_func(url, timeout=timeout, **kwargs)
-            if resp.status_code < 500 or attempt == max_retries:
-                resp.raise_for_status()
-                return resp
-        except (requests.exceptions.RequestException, requests.exceptions.Timeout) as e:
-            if attempt == max_retries:
-                raise
-            logger.warning(f"Connection error {e}, retrying {attempt + 1}/{max_retries}...")
-        
-        wait = min(60, 2 ** (attempt + 1))
-        time.sleep(wait)
-    return None
-
-def _get_accurate_entry_count(leaderboard_id, session=None):
-    url = "https://kovaaks.com/webapp-backend/leaderboard/scores/global"
-    params = {"leaderboardId": leaderboard_id, "page": 0, "max": 1}
-    try:
-        resp = _api_request_with_retry("get", url, params=params, timeout=15, max_retries=3, session=session)
-        if resp:
-            data = resp.json()
-            return int(data.get("total", 0))
-    except Exception as e:
-        logger.debug(f"Failed to fetch accurate count for lid={leaderboard_id}: {e}")
-    return None
 
 def fetch_all_scenarios(pages_limit=0, entries_limit=100):
     url = "https://kovaaks.com/webapp-backend/scenario/popular"
@@ -55,28 +33,29 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100):
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     
-    while True:
-        if pages_limit > 0 and page >= pages_limit:
-            logger.info(f"Reached page limit of {pages_limit}")
-            break
+    # Single executor for the entire fetch (perf: was per-page before)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        while True:
+            if pages_limit > 0 and page >= pages_limit:
+                logger.info(f"Reached page limit of {pages_limit}")
+                break
 
-        logger.info(f"Fetching page {page}")
-        params = {"page": page, "max": 100}
-        try:
-            resp = _api_request_with_retry("get", url, params=params, session=session)
-            data = resp.json()
-        except Exception as e:
-            logger.error(f"Failed to fetch page {page}: {e}")
-            break
-            
-        items = data.get("data", [])
-        if not items:
-            break
+            logger.info(f"Fetching page {page}")
+            params = {"page": page, "max": 100}
+            try:
+                resp = api_request_with_retry("get", url, params=params, session=session)
+                data = resp.json()
+            except Exception as e:
+                logger.error(f"Failed to fetch page {page}: {e}")
+                break
+                
+            items = data.get("data", [])
+            if not items:
+                break
 
-        # Fetch accurate entry counts in parallel for the current page
-        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            # Fetch accurate entry counts in parallel for the current page
             future_to_item = {
-                executor.submit(_get_accurate_entry_count, it.get("leaderboardId"), session): it
+                executor.submit(get_accurate_entry_count, it.get("leaderboardId"), session): it
                 for it in items
             }
             for future in concurrent.futures.as_completed(future_to_item):
@@ -87,24 +66,24 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100):
                         item["counts"] = {}
                     item["counts"]["entries"] = accurate_count
 
-        all_data.extend(items)
-        
-        # Check if we should stop
-        max_on_page = max(
-            (int(it.get("counts", {}).get("entries", 0)) for it in items),
-            default=0,
-        )
-        if max_on_page < entries_limit:
-            logger.info(f"Stopping at page {page} - max entries {max_on_page} < {entries_limit}")
-            break
+            all_data.extend(items)
+            
+            # Check if we should stop
+            max_on_page = max(
+                (int(it.get("counts", {}).get("entries", 0)) for it in items),
+                default=0,
+            )
+            if max_on_page < entries_limit:
+                logger.info(f"Stopping at page {page} - max entries {max_on_page} < {entries_limit}")
+                break
 
-        total = data.get("total", 0)
-        page += 1
-        if len(all_data) >= total:
-            break
-        
-        # Respectful delay
-        time.sleep(0.2)
+            total = data.get("total", 0)
+            page += 1
+            if len(all_data) >= total:
+                break
+            
+            # Respectful delay
+            time.sleep(0.2)
 
     logger.info(f"Fetched {len(all_data)} total scenarios")
     return all_data
