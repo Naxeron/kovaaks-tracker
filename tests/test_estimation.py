@@ -15,9 +15,6 @@ from constants import (
     SCENARIO_POPULARITY_DROP_OFF_POINTS,
 )
 
-# Alias used in kovaaks_gui.py — verify the pattern works
-get_estimated_scenario_count = get_estimated_matching_count
-
 
 # ---------------------------------------------------------------------------
 # get_estimated_fetch_count
@@ -90,14 +87,3 @@ class TestGetEstimatedMatchingCount:
             current = get_estimated_matching_count(t)
             assert current <= prev
             prev = current
-
-
-# ---------------------------------------------------------------------------
-# get_estimated_scenario_count (alias of matching count)
-# ---------------------------------------------------------------------------
-
-class TestGetEstimatedScenarioCount:
-    def test_matches_matching_count(self):
-        """This function should behave identically to get_estimated_matching_count."""
-        for val in [0, 50, 100, 500, 1000, 5000, 10000]:
-            assert get_estimated_scenario_count(val) == get_estimated_matching_count(val)
