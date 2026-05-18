@@ -237,7 +237,7 @@ class KovaaksApp(tk.Tk):
     def _auto_refresh_step(self):
         if self._cfg.get("auto_refresh", False) and not self._running:
             if self._cfg.get("auto_refresh_github_only", False):
-                self._set_running(True, "Checking for GitHub updates...")
+                self._set_running(True, "Checking for GitHub updates...", disable_ui=False)
                 threading.Thread(target=self._do_background_github_check, daemon=True).start()
                 return
 
@@ -940,11 +940,12 @@ class KovaaksApp(tk.Tk):
     # -------------------------------------------------------------------
     # Fetch All — unified fetch operation
     # -------------------------------------------------------------------
-    def _set_running(self, running, status="Ready"):
+    def _set_running(self, running, status="Ready", disable_ui=True):
         self._running = running
-        state = "disabled" if running else "normal"
-        for btn in self._all_buttons:
-            btn.configure(state=state)
+        if disable_ui or not running:
+            state = "disabled" if running else "normal"
+            for btn in self._all_buttons:
+                btn.configure(state=state)
         self._status_var.set(status)
 
     def _on_fetch_all(self, force_login=True):
