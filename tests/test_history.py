@@ -61,12 +61,11 @@ class TestRecordHistoryPoints:
         assert history[recent_key] == 5500  # Updated value
 
     def test_prunes_to_168(self):
-        """History should prune one oldest record when exceeding 168 entries.
+        """History should prune to exactly 168 entries via while loop.
         
-        The code only removes a single oldest key per call when len(history) > 168.
         With 170 entries + 1 new (not deduped), the code adds the new one (171)
-        then prunes one (170). We need entries that are all > 1 hour apart
-        so dedup doesn't trigger.
+        then prunes down to 168.  Entries are spaced 2 hours apart so dedup
+        doesn't trigger.
         """
         now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
         # Create 170 entries, each spaced 2 hours apart (beyond 1-hour dedup window)
@@ -80,8 +79,8 @@ class TestRecordHistoryPoints:
         app._record_history_points(scenarios)
 
         history = app._scores_cache["entry_history"]["lid-1"]
-        # After adding one new entry (171) and pruning one oldest (170)
-        assert len(history) == 170
+        # After adding one new entry (171) and pruning to 168
+        assert len(history) == 168
 
     def test_cleans_future_timestamps(self):
         """Timestamps in the future (>1 hour) should be cleaned up."""

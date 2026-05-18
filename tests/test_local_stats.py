@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kovaaks_gui import _get_local_stats
+from stats import get_local_stats as _get_local_stats
 
 
 class TestGetLocalStats:

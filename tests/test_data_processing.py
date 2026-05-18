@@ -33,6 +33,10 @@ def _make_app_stub(scenario_info, user_by_lid, friends_by_lid,
     app._sort_state = None
     app._filters = {}
 
+    # Local stats cache support
+    app._local_stats_cache = None
+    app._local_stats_dirty = True
+
     # Mock the methods that _rebuild_data calls
     app._get_stats_dir.return_value = stats_dir or "/nonexistent"
     app.after = MagicMock()
