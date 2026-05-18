@@ -63,7 +63,7 @@ from data_processing import (
     natural_sort_key,
     parse_leaderboard_entries,
 )
-from dialogs import PasswordDialog, SettingsDialog, _bind_entry_ctrl_a
+from dialogs import PasswordDialog, SettingsDialog, _bind_entry_ctrl_a, ToolTip
 from fetch_worker import run_fetch_all
 from logging_helpers import setup_logging, StdoutRedirector
 
@@ -405,6 +405,13 @@ class KovaaksApp(tk.Tk):
         points_label = ttk.Label(filter_frame, textvariable=self._points_var,
                                  style="Dark.TLabel")
         points_label.pack(side="right", padx=8)
+
+        self._tooltips = [
+            ToolTip(count_label, lambda: "Count of scenarios currently shown in the table."),
+            ToolTip(points_label, lambda: "Points:\nSum of (Total Entries - Your Rank) for all shown scenarios.\n1 Point = 1 Player beaten."),
+            ToolTip(potential_label, lambda: "Potential Points:\nSum of (Your Rank - 1) for played scenarios,\nor (Total Entries - 1) for unplayed scenarios.\nThe maximum points you could gain if you achieved Rank 1 in everything."),
+            ToolTip(projected_gain_label, self._get_projected_gain_tooltip)
+        ]
 
         # Toggle filter buttons
         toggle_frame = tk.Frame(content, bg=BG, padx=12)
@@ -804,6 +811,20 @@ class KovaaksApp(tk.Tk):
     # -------------------------------------------------------------------
     # Data display
     # -------------------------------------------------------------------
+    def _get_projected_gain_tooltip(self):
+        text = ("Projected Gain:\n"
+                "Estimated points gained if you reach your average percentile for each scenario's Aim Type.\n"
+                "Formula: (Your Rank - Expected Rank based on Aim Type average).\n\n"
+                "Your Averages:\n")
+        
+        if not hasattr(self, "_aim_type_avgs") or not self._aim_type_avgs:
+            return text + "No data yet."
+            
+        for atype, pct in sorted(self._aim_type_avgs.items()):
+            text += f"• {atype}: {pct:.1f}th Percentile\n"
+            
+        return text.strip()
+
     def _populate_tree(self, rows):
         yview = self._tree.yview()
         selected = self._tree.selection()
@@ -1043,6 +1064,7 @@ class KovaaksApp(tk.Tk):
                 total_count += stats["count"]
 
         global_avg_pct = (total_sum / total_count) if total_count > 0 else 50.0
+        self._aim_type_avgs = aim_type_avgs
 
         stats_dir = self._get_stats_dir()
         # Use cached local stats unless marked dirty
