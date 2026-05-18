@@ -15,6 +15,57 @@ def _bind_entry_ctrl_a(entry):
     entry.bind("<Control-a>", select_all)
     entry.bind("<Control-A>", select_all)
 
+class ToolTip:
+    def __init__(self, widget, text_func):
+        self.widget = widget
+        self.text_func = text_func
+        self.tipwindow = None
+        self.id = None
+        self.widget.bind("<Enter>", self.enter)
+        self.widget.bind("<Leave>", self.leave)
+
+    def enter(self, event=None):
+        self.schedule()
+
+    def leave(self, event=None):
+        self.unschedule()
+        self.hidetip()
+
+    def schedule(self):
+        self.unschedule()
+        self.id = self.widget.after(300, self.showtip)
+
+    def unschedule(self):
+        id = self.id
+        self.id = None
+        if id:
+            self.widget.after_cancel(id)
+
+    def showtip(self, event=None):
+        if self.tipwindow or not self.text_func:
+            return
+        text = self.text_func() if callable(self.text_func) else self.text_func
+        if not text:
+            return
+        
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(1)
+        tw.wm_geometry(f"+{x}+{y}")
+        
+        label = tk.Label(tw, text=text, justify="left",
+                         background=BG_LIGHTER, foreground=TEXT,
+                         relief="solid", borderwidth=1, highlightbackground=BORDER,
+                         font=("Segoe UI", 9))
+        label.pack(ipadx=6, ipady=4)
+
+    def hidetip(self):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
 class PasswordDialog(tk.Toplevel):
     """Modal dialog for KovaaKs password prompt on startup."""
 
