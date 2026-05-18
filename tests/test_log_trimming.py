@@ -7,7 +7,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from constants import LAUNCH_MARKER as _LAUNCH_MARKER
-from kovaaks_gui import _trim_log_file
+from logging_helpers import _trim_log_file
 
 
 class TestTrimLogFile:
