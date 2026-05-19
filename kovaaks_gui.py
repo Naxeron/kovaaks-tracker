@@ -407,9 +407,9 @@ class KovaaksApp(tk.Tk):
         points_label.pack(side="right", padx=8)
 
         self._tooltips = [
-            ToolTip(count_label, lambda: "Count of scenarios currently shown in the table."),
-            ToolTip(points_label, lambda: "Points:\nSum of (Total Entries - Your Rank) for all shown scenarios.\n1 Point = 1 Player beaten."),
-            ToolTip(potential_label, lambda: "Potential Points:\nSum of (Your Rank - 1) for played scenarios,\nor (Total Entries - 1) for unplayed scenarios.\nThe maximum points you could gain if you achieved Rank 1 in everything."),
+            ToolTip(count_label, self._get_count_tooltip),
+            ToolTip(points_label, self._get_points_tooltip),
+            ToolTip(potential_label, self._get_potential_tooltip),
             ToolTip(projected_gain_label, self._get_projected_gain_tooltip)
         ]
 
@@ -811,11 +811,67 @@ class KovaaksApp(tk.Tk):
     # -------------------------------------------------------------------
     # Data display
     # -------------------------------------------------------------------
+    def _get_count_tooltip(self):
+        if not hasattr(self, "_current_stats"):
+            return "Count of scenarios currently shown in the table."
+        s = self._current_stats
+        return (f"Shown Scenarios: {s['total_count']:,}\n"
+                f"  • Played: {s['played_count']:,}\n"
+                f"  • Unplayed: {s['unplayed_count']:,}")
+
+    def _get_points_tooltip(self):
+        if not hasattr(self, "_current_stats"):
+            return "Points:\nSum of (Total Entries - Your Rank) for all shown scenarios.\n1 Point = 1 Player beaten."
+        
+        s = self._current_stats
+        is_global = self._cfg.get("always_show_total_points", True)
+        
+        text = ""
+        if is_global:
+            text += f"Global Points (All Scenarios): {self._global_points_sum:,}\n\n"
+            text += f"Filtered Points (Shown Only): {s['total_points']:,}\n"
+        else:
+            text += f"Filtered Points (Shown Only): {s['total_points']:,}\n"
+            
+        text += (f"How it's calculated (for shown scenarios):\n"
+                 f"  Total Entries (Played): {s['played_entries']:,}\n"
+                 f"  Your Total Ranks: {s['total_rank']:,}\n"
+                 f"  Result (Entries - Ranks): {s['played_entries'] - s['total_rank']:,}")
+        return text
+
+    def _get_potential_tooltip(self):
+        if not hasattr(self, "_current_stats"):
+            return "Potential Points:\nSum of (Your Rank - 1) for played scenarios,\nor (Total Entries - 1) for unplayed scenarios."
+        
+        s = self._current_stats
+        is_global = self._cfg.get("always_show_total_points", True)
+        
+        text = ""
+        if is_global:
+            text += f"Global Potential (All Scenarios): {self._global_potential_points_sum:,}\n\n"
+            text += f"Filtered Potential (Shown Only): {s['total_potential']:,}\n"
+        else:
+            text += f"Filtered Potential (Shown Only): {s['total_potential']:,}\n"
+            
+        text += (f"How it's calculated (for shown scenarios):\n"
+                 f"  From Played Scenarios: {s['total_rank'] - s['played_count']:,}\n"
+                 f"  From Unplayed Scenarios: {s['unplayed_entries'] - s['unplayed_count']:,}")
+        return text
+
     def _get_projected_gain_tooltip(self):
         text = ("Projected Gain:\n"
-                "Estimated points gained if you reach your average percentile for each scenario's Aim Type.\n"
-                "Formula: (Your Rank - Expected Rank based on Aim Type average).\n\n"
-                "Your Averages:\n")
+                "Estimated points gained if you reach your average percentile for each scenario's Aim Type.\n\n")
+        
+        if hasattr(self, "_current_stats"):
+            s = self._current_stats
+            is_global = self._cfg.get("always_show_total_points", True)
+            if is_global:
+                text += f"Global Projected Gain: {self._global_projected_gain_sum:,}\n"
+                text += f"Filtered Projected Gain (Shown Only): {s['total_projected']:,}\n\n"
+            else:
+                text += f"Filtered Projected Gain (Shown Only): {s['total_projected']:,}\n\n"
+                
+        text += "Your Averages:\n"
         
         if not hasattr(self, "_aim_type_avgs") or not self._aim_type_avgs:
             return text + "No data yet."
@@ -838,6 +894,18 @@ class KovaaksApp(tk.Tk):
         cols = [c[0] for c in COLUMNS]
         
         items_to_select = []
+        stats = {
+            "total_count": len(rows),
+            "played_count": 0,
+            "unplayed_count": 0,
+            "total_points": 0,
+            "total_potential": 0,
+            "total_projected": 0,
+            "played_entries": 0,
+            "unplayed_entries": 0,
+            "total_rank": 0
+        }
+
         for i, row in enumerate(rows):
             values = [row.get(c, "") for c in cols]
             values[0] = "▶"  # Play icon in first column
@@ -847,6 +915,29 @@ class KovaaksApp(tk.Tk):
             if len(values) > 1 and values[1] in selected_scenarios:
                 items_to_select.append(item)
                 
+            try:
+                stats["total_projected"] += float(row.get("_projected_gain", 0))
+                rank = row.get("My Rank", "")
+                entries = row.get("Entry Count", "")
+                if entries:
+                    e_val = int(entries)
+                    if rank:
+                        r_val = int(rank)
+                        stats["total_points"] += (e_val - r_val)
+                        stats["total_potential"] += (r_val - 1)
+                        stats["played_count"] += 1
+                        stats["played_entries"] += e_val
+                        stats["total_rank"] += r_val
+                    else:
+                        stats["total_potential"] += (e_val - 1)
+                        stats["unplayed_count"] += 1
+                        stats["unplayed_entries"] += e_val
+            except (ValueError, TypeError):
+                continue
+                
+        stats["total_projected"] = int(stats["total_projected"])
+        self._current_stats = stats
+                
         self._count_var.set(f"{len(rows)} rows")
         
         if self._cfg.get("always_show_total_points", True):
@@ -854,35 +945,9 @@ class KovaaksApp(tk.Tk):
             potential_to_show = self._global_potential_points_sum
             projected_gain_to_show = self._global_projected_gain_sum
         else:
-            total_points = 0
-            total_potential = 0
-            total_projected = 0
-            
-            # Using the stored aimType percentiles if possible
-            # Here we just iterate and use fallback 50.0 for projected gain if we don't recalculate fully.
-            # To be accurate when filtered, we just sum up the rows if we add Proj Gain to the rows. 
-            # Wait, since we are not adding Proj Gain column to the rows as requested by user,
-            # we will just recalculate the global_projected_gain_sum using the same rows.
-            # For simplicity, we just use the global projected gain since it's an estimate anyway, 
-            # or calculate it. We'll add the row's projected gain as a hidden field in the row dictionary so we can sum it!
-            for r in rows:
-                try:
-                    total_projected += float(r.get("_projected_gain", 0))
-                    rank = r.get("My Rank", "")
-                    entries = r.get("Entry Count", "")
-                    if entries:
-                        e_val = int(entries)
-                        if rank:
-                            r_val = int(rank)
-                            total_points += (e_val - r_val)
-                            total_potential += (r_val - 1)
-                        else:
-                            total_potential += (e_val - 1)
-                except (ValueError, TypeError):
-                    continue
-            points_to_show = total_points
-            potential_to_show = total_potential
-            projected_gain_to_show = int(total_projected)
+            points_to_show = stats["total_points"]
+            potential_to_show = stats["total_potential"]
+            projected_gain_to_show = stats["total_projected"]
 
         if points_to_show > 0:
             self._points_var.set(f"Points: {points_to_show:,}")
