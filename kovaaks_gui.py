@@ -1199,6 +1199,30 @@ class KovaaksApp(tk.Tk):
                 "Potential": "",
             }
 
+            try:
+                e_val = int(info["entries"])
+                if has_user:
+                    r_val = int(user_by_lid[lid]["rank"])
+                    self._global_points_sum += (e_val - r_val)
+                    self._global_potential_points_sum += (r_val - 1)
+                    
+                    expected_pct = aim_type_avgs.get(info.get("aimType"), global_avg_pct)
+                    expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
+                    if r_val > expected_rank:
+                        gain = r_val - expected_rank
+                        self._global_projected_gain_sum += gain
+                        row["_projected_gain"] = gain
+                else:
+                    self._global_potential_points_sum += (e_val - 1)
+                    
+                    expected_pct = aim_type_avgs.get(info.get("aimType"), global_avg_pct)
+                    expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
+                    gain = e_val - expected_rank
+                    self._global_projected_gain_sum += gain
+                    row["_projected_gain"] = gain
+            except (ValueError, TypeError):
+                pass
+
             if has_user or has_friends:
                 played += 1
                 best = None
@@ -1212,34 +1236,6 @@ class KovaaksApp(tk.Tk):
                             best = (fr["friend"], frank, fr["score"], fr.get("date", ""))
 
                 row["My Rank"] = str(user_by_lid[lid]["rank"]) if has_user else ""
-                if has_user:
-                    try:
-                        r_val = int(user_by_lid[lid]["rank"])
-                        e_val = int(info["entries"])
-                        self._global_points_sum += (e_val - r_val)
-                        self._global_potential_points_sum += (r_val - 1)
-                        
-                        expected_pct = aim_type_avgs.get(info.get("aimType"), global_avg_pct)
-                        expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
-                        if r_val > expected_rank:
-                            gain = r_val - expected_rank
-                            self._global_projected_gain_sum += gain
-                            row["_projected_gain"] = gain
-                    except (ValueError, TypeError):
-                        pass
-                else:
-                    try:
-                        e_val = int(info["entries"])
-                        self._global_potential_points_sum += (e_val - 1)
-                        
-                        expected_pct = aim_type_avgs.get(info.get("aimType"), global_avg_pct)
-                        expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
-                        gain = e_val - expected_rank
-                        self._global_projected_gain_sum += gain
-                        row["_projected_gain"] = gain
-                    except (ValueError, TypeError):
-                        pass
-
                 row["My Score"] = str(user_by_lid[lid]["score"]) if has_user else ""
                 row["Score Date"] = user_by_lid[lid].get("date", "") if has_user else ""
                 row["Best Friend"] = best[0] if best else ""
