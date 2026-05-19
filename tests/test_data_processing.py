@@ -171,14 +171,14 @@ class TestRebuildDataRows:
         assert app._global_potential_points_sum == 7999
 
     def test_fully_unplayed_no_potential_accumulated(self):
-        """Completely unplayed scenarios (no user, no friends) don't contribute potential."""
+        """Completely unplayed scenarios (no user, no friends) now contribute potential."""
         info = {"lid-u": {"name": "Unplayed", "entries": 8000}}
 
         app = _make_app_stub(info, {}, {})
         with patch("kovaaks_gui._get_local_stats", return_value={}):
             app._rebuild_data()
 
-        assert app._global_potential_points_sum == 0
+        assert app._global_potential_points_sum == 7999
 
     def test_best_friend_is_highest_ranked(self):
         info = {"lid-x": {"name": "Test", "entries": 5000}}

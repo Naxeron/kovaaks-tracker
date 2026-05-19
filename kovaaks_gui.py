@@ -98,6 +98,9 @@ class KovaaksApp(tk.Tk):
         self._points_var = tk.StringVar(value="")
         self._potential_var = tk.StringVar(value="")
         self._projected_gain_var = tk.StringVar(value="")
+        self._next_rank_var = tk.StringVar(value="")
+        self._unplayed_needed_var = tk.StringVar(value="")
+        self._next_global_points = None
         self._sort_state: tuple[str, bool] | None = None
         self._filters: dict[str, tk.BooleanVar] = {}
 
@@ -390,27 +393,22 @@ class KovaaksApp(tk.Tk):
         _bind_entry_ctrl_a(filter_entry)
         self._filter_var.trace_add("write", lambda *_a: self._apply_filter())
 
-        count_label = ttk.Label(filter_frame, textvariable=self._count_var,
-                                style="Dark.TLabel")
-        count_label.pack(side="right", padx=8)
-
         potential_label = ttk.Label(filter_frame, textvariable=self._potential_var,
                                      style="Dark.TLabel")
         potential_label.pack(side="right", padx=8)
-
-        projected_gain_label = ttk.Label(filter_frame, textvariable=self._projected_gain_var,
-                                         style="Dark.TLabel")
-        projected_gain_label.pack(side="right", padx=8)
 
         points_label = ttk.Label(filter_frame, textvariable=self._points_var,
                                  style="Dark.TLabel")
         points_label.pack(side="right", padx=8)
 
+        next_rank_label = ttk.Label(filter_frame, textvariable=self._next_rank_var,
+                                    style="Dark.TLabel")
+        next_rank_label.pack(side="right", padx=8)
+
         self._tooltips = [
-            ToolTip(count_label, self._get_count_tooltip),
             ToolTip(points_label, self._get_points_tooltip),
             ToolTip(potential_label, self._get_potential_tooltip),
-            ToolTip(projected_gain_label, self._get_projected_gain_tooltip)
+            ToolTip(next_rank_label, self._get_next_rank_tooltip)
         ]
 
         # Toggle filter buttons
@@ -856,6 +854,9 @@ class KovaaksApp(tk.Tk):
         text += (f"How it's calculated (for shown scenarios):\n"
                  f"  From Played Scenarios: {s['total_rank'] - s['played_count']:,}\n"
                  f"  From Unplayed Scenarios: {s['unplayed_entries'] - s['unplayed_count']:,}")
+                 
+        text += "\n\n" + "─"*30 + "\n\n"
+        text += self._get_projected_gain_tooltip()
         return text
 
     def _get_projected_gain_tooltip(self):
@@ -880,6 +881,21 @@ class KovaaksApp(tk.Tk):
             text += f"• {atype}: {pct:.1f}th Percentile\n"
             
         return text.strip()
+
+    def _get_next_rank_tooltip(self):
+        text = "Next Rank:\n"
+        if self._next_global_points is None:
+            return text + "Points needed to overtake the player above you on the global leaderboard.\nLoading..."
+        
+        diff = self._next_global_points - self._global_points_sum
+        text += f"You need {diff:,} more points to rank up globally."
+        
+        text += "\n\n" + "─"*30 + "\n\n"
+        unplayed_val = self._unplayed_needed_var.get()
+        if unplayed_val:
+            text += f"{unplayed_val}\n"
+        text += "Based on your projected averages,\nwe calculate how many more unplayed scenarios you need to play."
+        return text
 
     def _populate_tree(self, rows):
         yview = self._tree.yview()
@@ -1079,6 +1095,55 @@ class KovaaksApp(tk.Tk):
         threading.Thread(target=run_fetch_all, args=(self, username, password),
                          daemon=True).start()
 
+    def _fetch_next_rank_points(self):
+        current_points = self._global_points_sum
+        if current_points <= 0:
+            return
+            
+        username = self._cfg.get("username", "")
+        try:
+            import api
+            next_points = api.get_next_leaderboard_position_points(username, current_points)
+            if next_points and next_points > current_points:
+                self._next_global_points = next_points
+                self.after(0, self._update_next_rank_display)
+            else:
+                self.after(0, lambda: self._next_rank_var.set("Next Rank: Rank 1!"))
+                self.after(0, lambda: self._unplayed_needed_var.set("Unplayed Needed: 0"))
+        except Exception as e:
+            print(f"Error fetching next rank points: {e}")
+
+    def _update_next_rank_display(self):
+        if self._next_global_points is None:
+            return
+            
+        diff = self._next_global_points - self._global_points_sum
+        self._next_rank_var.set(f"Next Rank: +{diff:,}")
+        
+        # Calculate unplayed needed
+        # We find the average projected gain for an unplayed scenario
+        avg_gain = 0
+        unplayed_count = 0
+        for lid, info in self._scenario_info.items():
+            if lid not in self._user_by_lid:
+                try:
+                    e_val = int(info["entries"])
+                    expected_pct = self._aim_type_avgs.get(info.get("aimType"), 50.0)
+                    expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
+                    gain = e_val - expected_rank
+                    if gain > 0:
+                        avg_gain += gain
+                        unplayed_count += 1
+                except (ValueError, TypeError):
+                    pass
+                    
+        if unplayed_count > 0 and avg_gain > 0:
+            avg_per_unplayed = avg_gain / unplayed_count
+            needed = int(math.ceil(diff / avg_per_unplayed))
+            self._unplayed_needed_var.set(f"Unplayed Needed: {needed:,}")
+        else:
+            self._unplayed_needed_var.set("Unplayed Needed: N/A")
+
     def _rebuild_data_and_finish(self, errors=0):
         played, unplayed = self._rebuild_data()
         self._update_status(
@@ -1086,6 +1151,8 @@ class KovaaksApp(tk.Tk):
             f"({errors} errors)"
         )
         self._update_progress(100, 100)
+        # Fetch the next global points to show how far we are from the next rank
+        threading.Thread(target=self._fetch_next_rank_points, daemon=True).start()
 
 
 
@@ -1100,6 +1167,9 @@ class KovaaksApp(tk.Tk):
         self._global_points_sum = 0
         self._global_potential_points_sum = 0
         self._global_projected_gain_sum = 0
+        self._next_global_points = None
+        self._next_rank_var.set("Next Rank: Loading...")
+        self._unplayed_needed_var.set("Unplayed Needed: Loading...")
 
         # First pass: calculate average percentile per aimType
         aim_type_stats = {}
