@@ -773,6 +773,9 @@ class KovaaksApp(tk.Tk):
             f"Loaded from cache — {played} played, {unplayed} unplayed"
         )
         self._update_progress(1, 1)
+        
+        # Fetch the next global points to show how far we are from the next rank
+        threading.Thread(target=self._fetch_next_rank_points, daemon=True).start()
 
     # -------------------------------------------------------------------
     # Settings
@@ -830,12 +833,7 @@ class KovaaksApp(tk.Tk):
             text += f"Filtered Points (Shown Only): {s['total_points']:,}\n"
         else:
             text += f"Filtered Points (Shown Only): {s['total_points']:,}\n"
-            
-        text += (f"How it's calculated (for shown scenarios):\n"
-                 f"  Total Entries (Played): {s['played_entries']:,}\n"
-                 f"  Your Total Ranks: {s['total_rank']:,}\n"
-                 f"  Result (Entries - Ranks): {s['played_entries'] - s['total_rank']:,}")
-        return text
+        return text.strip()
 
     def _get_potential_tooltip(self):
         if not hasattr(self, "_current_stats"):
