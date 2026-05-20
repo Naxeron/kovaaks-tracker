@@ -275,12 +275,7 @@ class KovaaksApp(tk.Tk):
         if not changed:
             logger.info("Auto-refresh skipped: No updates on GitHub.")
             if self._scenario_info:
-                fake_master = []
-                for lid, info in self._scenario_info.items():
-                    fake_master.append({
-                        "leaderboardId": lid,
-                        "counts": {"entries": info.get("entries", 0)}
-                    })
+                fake_master = [{"leaderboardId": lid, "counts": {"entries": info.get("entries", 0)}} for lid, info in self._scenario_info.items()]
                 self._record_history_points(fake_master)
                 save_scores_cache(self._scores_cache)
             self._update_status("Ready (GitHub up-to-date)")
@@ -319,32 +314,15 @@ class KovaaksApp(tk.Tk):
     def _apply_styles(self):
         style = ttk.Style(self)
         style.theme_use("clam")
-
-        style.configure("Dark.Treeview",
-                        background=TREE_BG, foreground=TREE_FG,
-                        fieldbackground=TREE_BG, rowheight=28,
-                        font=("Segoe UI", 10), borderwidth=0)
-        style.configure("Dark.Treeview.Heading",
-                        background=HEADER_BG, foreground=TEXT,
-                        font=("Segoe UI", 10, "bold"), borderwidth=1,
-                        relief="flat")
-        style.map("Dark.Treeview",
-                  background=[("selected", TREE_SEL_BG)],
-                  foreground=[("selected", TREE_SEL_FG)])
-        style.map("Dark.Treeview.Heading",
-                  background=[("active", ACCENT)])
-
+        style.configure("Dark.Treeview", background=TREE_BG, foreground=TREE_FG, fieldbackground=TREE_BG, rowheight=28, font=("Segoe UI", 10), borderwidth=0)
+        style.configure("Dark.Treeview.Heading", background=HEADER_BG, foreground=TEXT, font=("Segoe UI", 10, "bold"), borderwidth=1, relief="flat")
+        style.map("Dark.Treeview", background=[("selected", TREE_SEL_BG)], foreground=[("selected", TREE_SEL_FG)])
+        style.map("Dark.Treeview.Heading", background=[("active", ACCENT)])
         style.configure("Dark.TFrame", background=BG)
-        style.configure("Dark.TLabel", background=BG, foreground=TEXT,
-                        font=("Segoe UI", 10))
-        style.configure("Status.TLabel", background=BG_DARKER, foreground=TEXT_DIM,
-                        font=("Segoe UI", 9), padding=[8, 4])
-        style.configure("Title.TLabel", background=BG, foreground=ACCENT,
-                        font=("Segoe UI", 18, "bold"))
-
-        style.configure("Dark.Vertical.TScrollbar",
-                        background=BG_LIGHTER, troughcolor=BG_DARKER,
-                        arrowcolor=TEXT)
+        style.configure("Dark.TLabel", background=BG, foreground=TEXT, font=("Segoe UI", 10))
+        style.configure("Status.TLabel", background=BG_DARKER, foreground=TEXT_DIM, font=("Segoe UI", 9), padding=[8, 4])
+        style.configure("Title.TLabel", background=BG, foreground=ACCENT, font=("Segoe UI", 18, "bold"))
+        style.configure("Dark.Vertical.TScrollbar", background=BG_LIGHTER, troughcolor=BG_DARKER, arrowcolor=TEXT)
 
     # -------------------------------------------------------------------
     # UI construction
@@ -989,7 +967,6 @@ class KovaaksApp(tk.Tk):
         query = self._filter_var.get().lower().strip()
         all_rows = list(self._all_data)
 
-        # Apply toggle filters
         if self._filters:
             losing = self._filters["losing"].get()
             friends_only = self._filters["friends_only"].get()
@@ -997,7 +974,6 @@ class KovaaksApp(tk.Tk):
             unplayed = self._filters["unplayed"].get()
 
             if losing or friends_only or me_only or unplayed:
-                # Set-based accumulation: each active filter adds its matches
                 matched = set()
                 for idx, r in enumerate(all_rows):
                     has_rank = r.get("My Rank", "") != ""
@@ -1006,21 +982,15 @@ class KovaaksApp(tk.Tk):
 
                     if losing and has_rank and has_friend and rank_diff:
                         try:
-                            if int(rank_diff) > 0:
-                                matched.add(idx)
-                        except (ValueError, TypeError):
-                            pass
-                    if friends_only and has_friend and not has_rank:
-                        matched.add(idx)
-                    if me_only and has_rank and not has_friend:
-                        matched.add(idx)
-                    if unplayed and not has_rank and not has_friend:
-                        matched.add(idx)
+                            if int(rank_diff) > 0: matched.add(idx)
+                        except (ValueError, TypeError): pass
+                    if friends_only and has_friend and not has_rank: matched.add(idx)
+                    if me_only and has_rank and not has_friend: matched.add(idx)
+                    if unplayed and not has_rank and not has_friend: matched.add(idx)
                 all_rows = [all_rows[i] for i in sorted(matched)]
 
         if query:
-            all_rows = [r for r in all_rows if any(
-                query in str(v).lower() for v in r.values())]
+            all_rows = [r for r in all_rows if any(query in str(v).lower() for v in r.values())]
 
         self._populate_tree(all_rows)
         self._refresh_columns(save=False)
@@ -1039,27 +1009,13 @@ class KovaaksApp(tk.Tk):
             return
         column, reverse = self._sort_state
 
-        # Separate items with and without values to keep empty items at the bottom
-        has_val = []
-        no_val = []
-        for r in self._all_data:
-            if str(r.get(column, "")).strip():
-                has_val.append(r)
-            else:
-                no_val.append(r)
-
-        has_val.sort(
-            key=lambda r: natural_sort_key(r.get(column, "")),
-            reverse=reverse)
-
+        has_val = [r for r in self._all_data if str(r.get(column, "")).strip()]
+        no_val = [r for r in self._all_data if not str(r.get(column, "")).strip()]
+        has_val.sort(key=lambda r: natural_sort_key(r.get(column, "")), reverse=reverse)
         self._all_data = has_val + no_val
 
-        cols = [c[0] for c in COLUMNS]
-        for c in cols:
-            arrow = ""
-            if c == column:
-                arrow = " ▼" if reverse else " ▲"
-            self._tree.heading(c, text=c + arrow)
+        for c in [col[0] for col in COLUMNS]:
+            self._tree.heading(c, text=c + ((" ▼" if reverse else " ▲") if c == column else ""))
 
     # -------------------------------------------------------------------
     # Fetch All — unified fetch operation
@@ -1096,9 +1052,14 @@ class KovaaksApp(tk.Tk):
     def _fetch_next_rank_points(self):
         current_points = self._global_points_sum
         if current_points <= 0:
+            self.after(0, lambda: (self._next_rank_var.set("Next Rank: N/A"), self._unplayed_needed_var.set("Unplayed Needed: N/A")))
             return
             
-        username = self._cfg.get("username", "")
+        username = self._cfg.get("username", "").strip()
+        if not username:
+            self.after(0, lambda: (self._next_rank_var.set("Next Rank: N/A (No Username)"), self._unplayed_needed_var.set("Unplayed Needed: N/A")))
+            return
+
         try:
             import api
             next_points = api.get_next_leaderboard_position_points(username, current_points)
@@ -1106,10 +1067,10 @@ class KovaaksApp(tk.Tk):
                 self._next_global_points = next_points
                 self.after(0, self._update_next_rank_display)
             else:
-                self.after(0, lambda: self._next_rank_var.set("Next Rank: Rank 1!"))
-                self.after(0, lambda: self._unplayed_needed_var.set("Unplayed Needed: 0"))
+                self.after(0, lambda: (self._next_rank_var.set("Next Rank: Rank 1!"), self._unplayed_needed_var.set("Unplayed Needed: 0")))
         except Exception as e:
-            print(f"Error fetching next rank points: {e}")
+            logger.warning("Error fetching next rank points: %s", e)
+            self.after(0, lambda: (self._next_rank_var.set("Next Rank: Error"), self._unplayed_needed_var.set("Unplayed Needed: Error")))
 
     def _update_next_rank_display(self):
         if self._next_global_points is None:

@@ -19,40 +19,37 @@ logger = logging.getLogger("kovaaks")
 # Estimation / interpolation
 # ---------------------------------------------------------------------------
 
-def get_estimated_fetch_count(min_entries):
-    """Estimate how many items we need to pull from the 'popular' API
-    before hitting the min_entries threshold.
-    """
-    m = min_entries
-    if m <= 0:
-        return SCENARIO_POPULARITY_DROP_OFF_POINTS[0][1]
-    if m >= SCENARIO_POPULARITY_DROP_OFF_POINTS[-1][0]:
-        return 0
+def safe_int(v, default=0):
+    try: return int(v)
+    except (ValueError, TypeError): return default
 
-    for i in range(len(SCENARIO_POPULARITY_DROP_OFF_POINTS) - 1):
-        x1, y1 = SCENARIO_POPULARITY_DROP_OFF_POINTS[i]
-        x2, y2 = SCENARIO_POPULARITY_DROP_OFF_POINTS[i + 1]
+
+def safe_float(v, default=0.0):
+    try: return float(v)
+    except (ValueError, TypeError): return default
+
+
+def _interpolate(m, points):
+    if m <= 0:
+        return points[0][1]
+    if m >= points[-1][0]:
+        return 0
+    for i in range(len(points) - 1):
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
         if x1 <= m <= x2:
-            ratio = (m - x1) / (x2 - x1)
-            return y1 - ratio * (y1 - y2)
+            return y1 - (m - x1) / (x2 - x1) * (y1 - y2)
     return 0
+
+
+def get_estimated_fetch_count(min_entries):
+    """Estimate how many items we need to pull from the 'popular' API."""
+    return _interpolate(min_entries, SCENARIO_POPULARITY_DROP_OFF_POINTS)
 
 
 def get_estimated_matching_count(min_entries):
     """Estimate how many scenarios will actually match the min_entries threshold."""
-    m = min_entries
-    if m <= 0:
-        return SCENARIO_DISTRIBUTION_POINTS[0][1]
-    if m >= SCENARIO_DISTRIBUTION_POINTS[-1][0]:
-        return 0
-
-    for i in range(len(SCENARIO_DISTRIBUTION_POINTS) - 1):
-        x1, y1 = SCENARIO_DISTRIBUTION_POINTS[i]
-        x2, y2 = SCENARIO_DISTRIBUTION_POINTS[i + 1]
-        if x1 <= m <= x2:
-            ratio = (m - x1) / (x2 - x1)
-            return y1 - ratio * (y1 - y2)
-    return 0
+    return _interpolate(min_entries, SCENARIO_DISTRIBUTION_POINTS)
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +63,6 @@ def natural_sort_key(val):
     s = str(val).strip()
     if not s:
         return (2, "")
-    # Try to clean up numeric strings like "1,234" or "-47.20%"
     clean = s.replace(",", "")
     if clean.endswith("%"):
         clean = clean[:-1]
@@ -82,39 +78,19 @@ def natural_sort_key(val):
 # ---------------------------------------------------------------------------
 
 def parse_leaderboard_entries(data, username):
-    """Parse a friends-leaderboard API response into user + friend entries.
-
-    Returns:
-        tuple: (user_entry_dict_or_None, list_of_friend_dicts)
-    """
-    friend_entries = []
-    user_entry = None
-
+    """Parse a friends-leaderboard API response into user + friend entries."""
+    friend_entries, user_entry = [], None
     for entry in data:
-        name = (entry.get("webappUsername")
-                or entry.get("steamAccountName", ""))
+        name = entry.get("webappUsername") or entry.get("steamAccountName", "")
         epoch = entry.get("attributes", {}).get("epoch", "")
-        score_date = ""
-        if epoch:
-            try:
-                score_date = datetime.datetime.fromtimestamp(
-                    int(epoch) / 1000
-                ).strftime("%Y-%m-%d")
-            except (ValueError, TypeError, OSError):
-                pass
-
+        try:
+            score_date = datetime.datetime.fromtimestamp(int(epoch) / 1000).strftime("%Y-%m-%d") if epoch else ""
+        except (ValueError, TypeError, OSError):
+            score_date = ""
+        item = {"rank": entry.get("rank", ""), "score": entry.get("score", ""), "date": score_date}
         if name.lower() == username.lower():
-            user_entry = {
-                "rank": entry.get("rank", ""),
-                "score": entry.get("score", ""),
-                "date": score_date,
-            }
+            user_entry = item
         else:
-            friend_entries.append({
-                "friend": name,
-                "rank": entry.get("rank", ""),
-                "score": entry.get("score", ""),
-                "date": score_date,
-            })
-
+            friend_entries.append({"friend": name, **item})
     return user_entry, friend_entries
+
