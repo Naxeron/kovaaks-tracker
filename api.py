@@ -207,30 +207,17 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
     return all_data
 
 def get_next_leaderboard_position_points(username, local_points, session=None):
-    """
-    Finds the score of the player strictly above the user's score on the global leaderboard.
-    Since the global leaderboard cannot easily be queried by rank > 100 or username,
-    we do a binary search based on local_points, as scores are monotonically decreasing.
-    """
+    """Finds the score of the player strictly above the user's score on the global leaderboard."""
     url = "https://kovaaks.com/webapp-backend/leaderboard/global/scores"
     
     # 1. Quick check on the first page (top 100)
     try:
-        resp = api_request_with_retry("get", url, params={"page": 0, "max": 100}, session=session)
-        if resp:
-            data = resp.json()
-            items = data.get("data", [])
+        if resp := api_request_with_retry("get", url, params={"page": 0, "max": 100}, session=session):
+            items = resp.json().get("data", [])
+            user_lower = username.lower()
             for i, item in enumerate(items):
-                # If we found the user, the next rank up is the previous index (if i > 0)
-                if item.get("webappUsername", "").lower() == username.lower() or item.get("steamAccountName", "").lower() == username.lower():
-                    if i > 0:
-                        return items[i-1].get("points", local_points)
-                    else:
-                        # User is rank 1, no points needed
-                        return local_points
-            
-            # If we didn't find the user, but their points are higher than the last person on page 0,
-            # they must be rank 101+. If their points are somehow higher than rank 1, they are rank 1.
+                if user_lower in (item.get("webappUsername", "").lower(), item.get("steamAccountName", "").lower()):
+                    return items[i-1].get("points", local_points) if i > 0 else local_points
             if items and local_points >= items[0].get("points", 0):
                 return local_points
     except Exception as e:
@@ -238,65 +225,39 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
 
     # 2. Binary search to find the minimum score strictly greater than local_points
     try:
-        # First find total pages
-        resp = api_request_with_retry("get", url, params={"page": 0, "max": 100}, session=session)
-        if not resp:
-            return local_points
+        if resp := api_request_with_retry("get", url, params={"page": 0, "max": 100}, session=session):
+            total_players = resp.json().get("total", 0)
+            if total_players == 0:
+                return local_points
             
-        total_players = resp.json().get("total", 0)
-        if total_players == 0:
-            return local_points
+            low, high = 0, total_players // 100
+            target_points, best_points_above = local_points, None
             
-        low = 0
-        high = total_players // 100
-        
-        target_points = local_points
-        best_points_above = None
-        
-        while low <= high:
-            mid = (low + high) // 2
-            resp = api_request_with_retry("get", url, params={"page": mid, "max": 100}, session=session)
-            if not resp:
-                break
-            items = resp.json().get("data", [])
-            if not items:
-                break
-                
-            first_score_on_page = items[0].get("points", 0)
-            last_score_on_page = items[-1].get("points", 0)
-            
-            # We want to find the smallest score > target_points
-            
-            # Update best_points_above with any valid candidates from this page
-            for item in reversed(items):
-                p = item.get("points", 0)
-                if p > target_points:
-                    if best_points_above is None or p < best_points_above:
-                        best_points_above = p
-                    break # Since reversed items are ascending, the first one > target is the smallest on this page
+            while low <= high:
+                mid = (low + high) // 2
+                if not (resp := api_request_with_retry("get", url, params={"page": mid, "max": 100}, session=session)):
+                    break
+                items = resp.json().get("data", [])
+                if not items:
+                    break
                     
-            if target_points > first_score_on_page:
-                # Target is greater than everything here, we must go to higher ranks (lower page index)
-                high = mid - 1
-            elif target_points < last_score_on_page:
-                # Target is lower than everything here, we must go to lower ranks (higher page index)
-                low = mid + 1
-            else:
-                # Target is within the bounds of this page. We already updated best_points_above,
-                # but if there wasn't anything > target on this page, it might be on the previous page.
-                if best_points_above is not None and best_points_above <= first_score_on_page:
-                    # We found a valid > target on this page. We don't need to search higher pages because
-                    # anything on a higher page would be even larger.
+                first_score_on_page = items[0].get("points", 0)
+                last_score_on_page = items[-1].get("points", 0)
+                
+                if candidates := [it.get("points", 0) for it in items if it.get("points", 0) > target_points]:
+                    best_points_above = min(best_points_above, candidates[-1]) if best_points_above is not None else candidates[-1]
+                        
+                if target_points > first_score_on_page:
+                    high = mid - 1
+                elif target_points < last_score_on_page:
+                    low = mid + 1
+                elif best_points_above is not None and best_points_above <= first_score_on_page:
                     break
                 else:
-                    # The only way we get here is if target >= first_score_on_page, but since
-                    # target <= first_score_on_page (we are in else), target == first_score_on_page.
-                    # In that case, the strictly greater score is on the previous page.
                     high = mid - 1
-                
-        if best_points_above is not None:
-            return best_points_above
-            
+                    
+            if best_points_above is not None:
+                return best_points_above
     except Exception as e:
         logger.warning("Failed during binary search of global leaderboard: %s", e)
 
