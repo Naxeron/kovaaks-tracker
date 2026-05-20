@@ -62,6 +62,7 @@ from data_processing import (
     get_estimated_matching_count,
     natural_sort_key,
     parse_leaderboard_entries,
+    safe_int,
 )
 from dialogs import PasswordDialog, SettingsDialog, _bind_entry_ctrl_a, ToolTip
 from fetch_worker import run_fetch_all
@@ -932,29 +933,14 @@ class KovaaksApp(tk.Tk):
                 
         self._count_var.set(f"{len(rows)} rows")
         
-        if self._cfg.get("always_show_total_points", True):
-            points_to_show = self._global_points_sum
-            potential_to_show = self._global_potential_points_sum
-            projected_gain_to_show = self._global_projected_gain_sum
-        else:
-            points_to_show = stats["total_points"]
-            potential_to_show = stats["total_potential"]
-            projected_gain_to_show = stats["total_projected"]
+        use_global = self._cfg.get("always_show_total_points", True)
+        pts = self._global_points_sum if use_global else stats["total_points"]
+        pot = self._global_potential_points_sum if use_global else stats["total_potential"]
+        gain = self._global_projected_gain_sum if use_global else stats["total_projected"]
 
-        if points_to_show > 0:
-            self._points_var.set(f"Points: {points_to_show:,}")
-        else:
-            self._points_var.set("")
-
-        if potential_to_show > 0:
-            self._potential_var.set(f"Potential Points: {potential_to_show:,}")
-        else:
-            self._potential_var.set("")
-
-        if projected_gain_to_show > 0:
-            self._projected_gain_var.set(f"Projected Gain: {projected_gain_to_show:,}")
-        else:
-            self._projected_gain_var.set("")
+        self._points_var.set(f"Points: {pts:,}" if pts > 0 else "")
+        self._potential_var.set(f"Potential Points: {pot:,}" if pot > 0 else "")
+        self._projected_gain_var.set(f"Projected Gain: {gain:,}" if gain > 0 else "")
 
         self._schedule_autofit()
         
@@ -1130,34 +1116,15 @@ class KovaaksApp(tk.Tk):
         self._next_rank_var.set("Next Rank: Loading...")
         self._unplayed_needed_var.set("Unplayed Needed: Loading...")
 
-        # First pass: calculate average percentile per aimType
-        aim_type_stats = {}
+        aim_type_pcts = {}
         for lid, info in scenario_info.items():
-            if lid in user_by_lid:
-                try:
-                    rank = int(user_by_lid[lid]["rank"])
-                    entries = int(info["entries"])
-                    if entries > 0:
-                        pct = (1 - rank / entries) * 100
-                        aim_type = info.get("aimType")
-                        if aim_type:
-                            if aim_type not in aim_type_stats:
-                                aim_type_stats[aim_type] = {"sum": 0.0, "count": 0}
-                            aim_type_stats[aim_type]["sum"] += pct
-                            aim_type_stats[aim_type]["count"] += 1
-                except (ValueError, TypeError):
-                    pass
+            if (u_data := user_by_lid.get(lid)) and (entries := safe_int(info.get("entries", 0))) > 0:
+                if (rank := safe_int(u_data.get("rank"))) is not None and (aim_type := info.get("aimType")):
+                    aim_type_pcts.setdefault(aim_type, []).append((1 - rank / entries) * 100)
 
-        aim_type_avgs = {}
-        total_sum = 0.0
-        total_count = 0
-        for atype, stats in aim_type_stats.items():
-            if stats["count"] > 0:
-                aim_type_avgs[atype] = stats["sum"] / stats["count"]
-                total_sum += stats["sum"]
-                total_count += stats["count"]
-
-        global_avg_pct = (total_sum / total_count) if total_count > 0 else 50.0
+        aim_type_avgs = {atype: sum(pcts) / len(pcts) for atype, pcts in aim_type_pcts.items()}
+        all_pcts = [p for pcts in aim_type_pcts.values() for p in pcts]
+        global_avg_pct = sum(all_pcts) / len(all_pcts) if all_pcts else 50.0
         self._aim_type_avgs = aim_type_avgs
 
         stats_dir = self._get_stats_dir()
