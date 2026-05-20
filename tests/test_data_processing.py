@@ -209,3 +209,72 @@ class TestRebuildDataRows:
         assert row["Potential"] != ""
         # Should be a numeric string
         int(row["Potential"])  # Should not raise
+
+    @patch('threading.Thread')
+    def test_rebuild_data_next_rank_updates(self, mock_thread):
+        class KovaaksAppStub:
+            def __init__(self):
+                self._scenario_info = {}
+                self._user_by_lid = {}
+                self._friends_by_lid = {}
+                self._scores_cache = {"entry_history": {}}
+                self._cfg = {"stats_dir": "/nonexistent", "min_entries": "1", "always_show_total_points": True}
+                self._global_points_sum = 0
+                self._global_potential_points_sum = 0
+                self._global_projected_gain_sum = 0
+                self._all_data = []
+                self._sort_state = None
+                self._filters = {}
+                self._local_stats_cache = {}
+                self._local_stats_dirty = False
+                
+                self._next_global_points = None
+                self._fetching_next_rank = False
+                self._next_rank_var = MagicMock()
+                self._unplayed_needed_var = MagicMock()
+                self._aim_type_avgs = {}
+                
+            def _get_stats_dir(self):
+                return "/nonexistent"
+                
+            def after(self, delay, callback):
+                pass
+                
+            def _apply_current_sort(self):
+                pass
+                
+            def _apply_filter(self):
+                pass
+                
+            def _update_next_rank_display(self):
+                pass
+                
+            def _fetch_next_rank_points(self):
+                pass
+
+        # Case 1: _next_global_points is None -> should trigger thread fetch
+        app = KovaaksAppStub()
+        app._rebuild_data = kovaaks_gui.KovaaksApp._rebuild_data.__get__(app)
+        app._rebuild_data()
+        assert app._fetching_next_rank is True
+        mock_thread.assert_called_once()
+        mock_thread.reset_mock()
+
+        # Case 2: _next_global_points is set, points < _next_global_points -> should update locally, not start thread
+        app._next_global_points = 5000
+        app._scenario_info = {"lid1": {"name": "S1", "entries": 10000}}
+        app._user_by_lid = {"lid1": {"rank": 6000, "score": 100.0}} # 10000 - 6000 = 4000 points
+        app._fetching_next_rank = False
+        with patch.object(app, "_update_next_rank_display") as mock_local_upd:
+            app._rebuild_data()
+            mock_local_upd.assert_called_once()
+            mock_thread.assert_not_called()
+
+        # Case 3: _next_global_points is set, points >= _next_global_points (overtaken) -> should trigger thread fetch
+        app._next_global_points = 5000
+        app._scenario_info = {"lid1": {"name": "S1", "entries": 10000}}
+        app._user_by_lid = {"lid1": {"rank": 4000, "score": 200.0}} # 10000 - 4000 = 6000 points
+        app._fetching_next_rank = False
+        app._rebuild_data()
+        assert app._fetching_next_rank is True
+        mock_thread.assert_called_once()
