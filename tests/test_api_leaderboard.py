@@ -39,7 +39,7 @@ def test_get_next_leaderboard_position_points_user_rank_1(mock_req):
 def test_get_next_leaderboard_position_points_binary_search(mock_req):
     # User not in top 100
     
-    def side_effect(method, url, params, session=None):
+    def side_effect(method, url, params, session=None, **kwargs):
         mock_resp = MagicMock()
         page = params.get("page", 0)
         
@@ -90,3 +90,11 @@ def test_get_next_leaderboard_position_points_binary_search(mock_req):
     # Minimum strictly greater is 60 (from page 4)
     res = api.get_next_leaderboard_position_points("testuser", 50)
     assert res == 60
+
+@patch('api.api_request_with_retry')
+def test_get_next_leaderboard_position_points_error(mock_req):
+    # Simulate API exception
+    mock_req.side_effect = Exception("API rate limited or down")
+    
+    with pytest.raises(Exception, match="API rate limited or down"):
+        api.get_next_leaderboard_position_points("testuser", 4000)

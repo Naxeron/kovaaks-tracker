@@ -212,7 +212,7 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
     
     # 1. Quick check on the first page (top 100)
     try:
-        if resp := api_request_with_retry("get", url, params={"page": 0, "max": 100}, session=session):
+        if resp := api_request_with_retry("get", url, params={"page": 0, "max": 100}, max_retries=3, session=session):
             items = resp.json().get("data", [])
             user_lower = username.lower()
             for i, item in enumerate(items):
@@ -225,7 +225,7 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
 
     # 2. Binary search to find the minimum score strictly greater than local_points
     try:
-        if resp := api_request_with_retry("get", url, params={"page": 0, "max": 100}, session=session):
+        if resp := api_request_with_retry("get", url, params={"page": 0, "max": 100}, max_retries=3, session=session):
             total_players = resp.json().get("total", 0)
             if total_players == 0:
                 return local_points
@@ -235,7 +235,7 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
             
             while low <= high:
                 mid = (low + high) // 2
-                if not (resp := api_request_with_retry("get", url, params={"page": mid, "max": 100}, session=session)):
+                if not (resp := api_request_with_retry("get", url, params={"page": mid, "max": 100}, max_retries=3, session=session)):
                     break
                 items = resp.json().get("data", [])
                 if not items:
@@ -260,5 +260,6 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
                 return best_points_above
     except Exception as e:
         logger.warning("Failed during binary search of global leaderboard: %s", e)
+        raise
 
     return local_points
