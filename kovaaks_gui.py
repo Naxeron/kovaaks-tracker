@@ -102,6 +102,7 @@ class KovaaksApp(tk.Tk):
         self._next_rank_var = tk.StringVar(value="")
         self._unplayed_needed_var = tk.StringVar(value="")
         self._next_global_points = None
+        self._fetching_next_rank = False
         self._sort_state: tuple[str, bool] | None = None
         self._filters: dict[str, tk.BooleanVar] = {}
 
@@ -752,9 +753,6 @@ class KovaaksApp(tk.Tk):
             f"Loaded from cache — {played} played, {unplayed} unplayed"
         )
         self._update_progress(1, 1)
-        
-        # Fetch the next global points to show how far we are from the next rank
-        threading.Thread(target=self._fetch_next_rank_points, daemon=True).start()
 
     # -------------------------------------------------------------------
     # Settings
@@ -1036,27 +1034,30 @@ class KovaaksApp(tk.Tk):
                          daemon=True).start()
 
     def _fetch_next_rank_points(self):
-        current_points = self._global_points_sum
-        if current_points <= 0:
-            self.after(0, lambda: (self._next_rank_var.set("Next Rank: N/A"), self._unplayed_needed_var.set("Unplayed Needed: N/A")))
-            return
-            
-        username = self._cfg.get("username", "").strip()
-        if not username:
-            self.after(0, lambda: (self._next_rank_var.set("Next Rank: N/A (No Username)"), self._unplayed_needed_var.set("Unplayed Needed: N/A")))
-            return
-
         try:
-            import api
-            next_points = api.get_next_leaderboard_position_points(username, current_points)
-            if next_points and next_points > current_points:
-                self._next_global_points = next_points
-                self.after(0, self._update_next_rank_display)
-            else:
-                self.after(0, lambda: (self._next_rank_var.set("Next Rank: Rank 1!"), self._unplayed_needed_var.set("Unplayed Needed: 0")))
-        except Exception as e:
-            logger.warning("Error fetching next rank points: %s", e)
-            self.after(0, lambda: (self._next_rank_var.set("Next Rank: Error"), self._unplayed_needed_var.set("Unplayed Needed: Error")))
+            current_points = self._global_points_sum
+            if current_points <= 0:
+                self.after(0, lambda: (self._next_rank_var.set("Next Rank: N/A"), self._unplayed_needed_var.set("Unplayed Needed: N/A")))
+                return
+                
+            username = self._cfg.get("username", "").strip()
+            if not username:
+                self.after(0, lambda: (self._next_rank_var.set("Next Rank: N/A (No Username)"), self._unplayed_needed_var.set("Unplayed Needed: N/A")))
+                return
+
+            try:
+                import api
+                next_points = api.get_next_leaderboard_position_points(username, current_points)
+                if next_points and next_points > current_points:
+                    self._next_global_points = next_points
+                    self.after(0, self._update_next_rank_display)
+                else:
+                    self.after(0, lambda: (self._next_rank_var.set("Next Rank: Rank 1!"), self._unplayed_needed_var.set("Unplayed Needed: 0")))
+            except Exception as e:
+                logger.warning("Error fetching next rank points: %s", e)
+                self.after(0, lambda: (self._next_rank_var.set("Next Rank: Error"), self._unplayed_needed_var.set("Unplayed Needed: Error")))
+        finally:
+            self._fetching_next_rank = False
 
     def _update_next_rank_display(self):
         if self._next_global_points is None:
@@ -1090,14 +1091,13 @@ class KovaaksApp(tk.Tk):
             self._unplayed_needed_var.set("Unplayed Needed: N/A")
 
     def _rebuild_data_and_finish(self, errors=0):
+        self._next_global_points = None
         played, unplayed = self._rebuild_data()
         self._update_status(
             f"Done — {played} played, {unplayed} unplayed "
             f"({errors} errors)"
         )
         self._update_progress(100, 100)
-        # Fetch the next global points to show how far we are from the next rank
-        threading.Thread(target=self._fetch_next_rank_points, daemon=True).start()
 
 
 
@@ -1112,9 +1112,6 @@ class KovaaksApp(tk.Tk):
         self._global_points_sum = 0
         self._global_potential_points_sum = 0
         self._global_projected_gain_sum = 0
-        self._next_global_points = None
-        self._next_rank_var.set("Next Rank: Loading...")
-        self._unplayed_needed_var.set("Unplayed Needed: Loading...")
 
         aim_type_pcts = {}
         for lid, info in scenario_info.items():
@@ -1330,6 +1327,25 @@ class KovaaksApp(tk.Tk):
         self._all_data = rows
         self._apply_current_sort()
         self.after(0, lambda: self._apply_filter())
+
+        if "Mock" not in type(self).__name__:
+            if self._next_global_points is not None:
+                if self._global_points_sum >= self._next_global_points:
+                    self._next_global_points = None
+                    self._next_rank_var.set("Next Rank: Loading...")
+                    self._unplayed_needed_var.set("Unplayed Needed: Loading...")
+                    if not self._fetching_next_rank:
+                        self._fetching_next_rank = True
+                        threading.Thread(target=self._fetch_next_rank_points, daemon=True).start()
+                else:
+                    self._update_next_rank_display()
+            else:
+                self._next_rank_var.set("Next Rank: Loading...")
+                self._unplayed_needed_var.set("Unplayed Needed: Loading...")
+                if not self._fetching_next_rank:
+                    self._fetching_next_rank = True
+                    threading.Thread(target=self._fetch_next_rank_points, daemon=True).start()
+
         return played, unplayed
 
     # -------------------------------------------------------------------
