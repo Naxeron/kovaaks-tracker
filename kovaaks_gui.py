@@ -1485,7 +1485,7 @@ class KovaaksApp(tk.Tk):
         sys.stderr = StdoutRedirector(self._append_log, sys.__stderr__)
 
         gui_handler = logging.Handler()
-        gui_handler.setLevel(logging.DEBUG)
+        gui_handler.setLevel(logger.level)
         gui_handler.emit = lambda record: self._append_log(
             f"[{record.levelname}] {record.getMessage()}")
         logger.addHandler(gui_handler)

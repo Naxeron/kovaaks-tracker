@@ -24,6 +24,10 @@ def _trim_log_file(path, keep=2):
     with open(path, "w", encoding="utf-8") as f:
         f.write(trimmed)
 
+def is_debug_mode():
+    """Check if the debug flag is set via command line arguments or environment variable."""
+    return "--debug" in sys.argv or "-d" in sys.argv or os.environ.get("KOVAAKS_DEBUG") == "1"
+
 def setup_logging():
     logger = logging.getLogger("kovaaks")
     
@@ -31,10 +35,11 @@ def setup_logging():
     if logger.handlers:
         return logger
 
-    logger.setLevel(logging.DEBUG)
+    log_level = logging.DEBUG if is_debug_mode() else logging.INFO
+    logger.setLevel(log_level)
 
     _console_handler = logging.StreamHandler(sys.stderr)
-    _console_handler.setLevel(logging.DEBUG)
+    _console_handler.setLevel(log_level)
     _console_handler.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
     logger.addHandler(_console_handler)
@@ -42,7 +47,7 @@ def setup_logging():
     _trim_log_file(LOG_FILE, keep=2)
 
     _file_handler = logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")
-    _file_handler.setLevel(logging.DEBUG)
+    _file_handler.setLevel(log_level)
     _file_handler.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
     logger.addHandler(_file_handler)
