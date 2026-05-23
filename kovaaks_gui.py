@@ -373,6 +373,10 @@ class KovaaksApp(tk.Tk):
         _bind_entry_ctrl_a(filter_entry)
         self._filter_var.trace_add("write", lambda *_a: self._apply_filter())
 
+        count_label = ttk.Label(filter_frame, textvariable=self._count_var,
+                                style="Dark.TLabel")
+        count_label.pack(side="right", padx=8)
+
         potential_label = ttk.Label(filter_frame, textvariable=self._potential_var,
                                      style="Dark.TLabel")
         potential_label.pack(side="right", padx=8)
@@ -386,6 +390,7 @@ class KovaaksApp(tk.Tk):
         next_rank_label.pack(side="right", padx=8)
 
         self._tooltips = [
+            ToolTip(count_label, self._get_count_tooltip),
             ToolTip(points_label, self._get_points_tooltip),
             ToolTip(potential_label, self._get_potential_tooltip),
             ToolTip(next_rank_label, self._get_next_rank_tooltip)
