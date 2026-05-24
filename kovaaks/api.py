@@ -133,7 +133,7 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
     """Fetch scenarios from the KovaaKs API (paginated, sorted by popularity).
     Stops early when all items on a page fall below *min_entries*.
     """
-    from data_processing import get_estimated_fetch_count
+    from .data_processing import get_estimated_fetch_count
 
     url = "https://kovaaks.com/webapp-backend/scenario/popular"
     all_data = []
