@@ -7,16 +7,16 @@ import threading
 import concurrent.futures
 import requests
 
-from constants import GITHUB_RAW_BASE, MIN_ENTRIES
-from api import (
+from .constants import GITHUB_RAW_BASE, MIN_ENTRIES
+from .api import (
     api_request_with_retry,
     fetch_all_scenarios,
     kovaaks_login,
     kovaaks_get_friends_scores,
 )
-from cache import save_scores_cache
-from config_helpers import save_config
-from data_processing import (
+from .cache import save_scores_cache
+from .config_helpers import save_config
+from .data_processing import (
     get_estimated_fetch_count,
     get_estimated_matching_count,
     parse_leaderboard_entries,

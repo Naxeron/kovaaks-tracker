@@ -11,8 +11,8 @@ import os
 
 logger = logging.getLogger("kovaaks")
 
-SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-SCORES_CACHE = os.path.join(SCRIPT_DIR, "scores_cache.json.gz")
+PROJECT_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCORES_CACHE = os.path.join(PROJECT_DIR, "data", "scores_cache.json.gz")
 
 
 def load_scores_cache():

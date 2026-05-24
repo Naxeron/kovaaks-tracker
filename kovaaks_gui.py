@@ -27,7 +27,7 @@ import queue
 # ---------------------------------------------------------------------------
 # Extracted modules
 # ---------------------------------------------------------------------------
-from constants import (
+from kovaaks.constants import (
     BG, BG_DARKER, BG_LIGHTER, ACCENT, ACCENT_HOVER, TEXT, TEXT_DIM,
     ENTRY_BG, TREE_BG, TREE_FG, TREE_SEL_BG, TREE_SEL_FG,
     LOG_BG, LOG_FG, ALT_ROW, HEADER_BG, BORDER, GREEN, GREEN_HOVER,
@@ -36,7 +36,7 @@ from constants import (
     GITHUB_RAW_BASE, STEAM_LAUNCH_URI,
     LAUNCH_MARKER as _LAUNCH_MARKER,
 )
-from api import (
+from kovaaks.api import (
     api_request_with_retry as _api_request_with_retry,
     KOVAAKS_HEADERS as _KOVAAKS_HEADERS,
     get_accurate_entry_count as _get_accurate_entry_count,
@@ -44,29 +44,29 @@ from api import (
     kovaaks_get_friends_scores,
     fetch_all_scenarios,
 )
-from cache import (
+from kovaaks.cache import (
     load_scenarios_from_cache,
     load_scores_cache,
     save_scores_cache,
     SCORES_CACHE,
 )
-from stats import get_local_stats as _get_local_stats
-from config_helpers import (
+from kovaaks.stats import get_local_stats as _get_local_stats
+from kovaaks.config_helpers import (
     load_config,
     save_config,
     get_default_stats_dir,
     CONFIG_PATH,
 )
-from data_processing import (
+from kovaaks.data_processing import (
     get_estimated_fetch_count,
     get_estimated_matching_count,
     natural_sort_key,
     parse_leaderboard_entries,
     safe_int,
 )
-from dialogs import PasswordDialog, SettingsDialog, _bind_entry_ctrl_a, ToolTip
-from fetch_worker import run_fetch_all
-from logging_helpers import setup_logging, StdoutRedirector
+from kovaaks.dialogs import PasswordDialog, SettingsDialog, _bind_entry_ctrl_a, ToolTip
+from kovaaks.fetch_worker import run_fetch_all
+from kovaaks.logging_helpers import setup_logging, StdoutRedirector
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -1051,7 +1051,7 @@ class KovaaksApp(tk.Tk):
                 return
 
             try:
-                import api
+                import kovaaks.api as api
                 next_points = api.get_next_leaderboard_position_points(username, current_points)
                 if next_points and next_points > current_points:
                     self._next_global_points = next_points

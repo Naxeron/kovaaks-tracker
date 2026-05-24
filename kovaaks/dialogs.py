@@ -1,11 +1,11 @@
 import tkinter as tk
 from tkinter import ttk
 
-from constants import (
+from .constants import (
     BG, BG_LIGHTER, ENTRY_BG, TEXT, TEXT_DIM, ACCENT, ACCENT_HOVER, BORDER
 )
-from config_helpers import get_default_stats_dir
-from data_processing import get_estimated_matching_count
+from .config_helpers import get_default_stats_dir
+from .data_processing import get_estimated_matching_count
 
 def _bind_entry_ctrl_a(entry):
     entry.bind("<Control-a>", lambda e: (e.widget.select_range(0, tk.END), e.widget.icursor(tk.END), "break")[-1])

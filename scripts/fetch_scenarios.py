@@ -12,14 +12,14 @@ import requests
 
 # Add parent directory to path for module imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api import api_request_with_retry, get_accurate_entry_count
+from kovaaks.api import api_request_with_retry, get_accurate_entry_count
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("fetch_scenarios")
 
-SCENARIOS_JSON = "scenarios.json.gz"
-SCENARIOS_HISTORY_JSON = "scenarios_history.json.gz"
+SCENARIOS_JSON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "scenarios.json.gz")
+SCENARIOS_HISTORY_JSON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "scenarios_history.json.gz")
 
 
 def fetch_all_scenarios(pages_limit=0, entries_limit=100):

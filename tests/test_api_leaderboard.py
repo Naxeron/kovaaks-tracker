@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import patch, MagicMock
-import api
+import kovaaks.api as api
 
-@patch('api.api_request_with_retry')
+@patch('kovaaks.api.api_request_with_retry')
 def test_get_next_leaderboard_position_points_found_user(mock_req):
     # Mock finding the user on the first page
     mock_resp = MagicMock()
@@ -19,7 +19,7 @@ def test_get_next_leaderboard_position_points_found_user(mock_req):
     res = api.get_next_leaderboard_position_points("testuser", 4000)
     assert res == 5000
 
-@patch('api.api_request_with_retry')
+@patch('kovaaks.api.api_request_with_retry')
 def test_get_next_leaderboard_position_points_user_rank_1(mock_req):
     # Mock user is rank 1
     mock_resp = MagicMock()
@@ -35,7 +35,7 @@ def test_get_next_leaderboard_position_points_user_rank_1(mock_req):
     res = api.get_next_leaderboard_position_points("testuser", 5000)
     assert res == 5000
 
-@patch('api.api_request_with_retry')
+@patch('kovaaks.api.api_request_with_retry')
 def test_get_next_leaderboard_position_points_binary_search(mock_req):
     # User not in top 100
     
@@ -91,7 +91,7 @@ def test_get_next_leaderboard_position_points_binary_search(mock_req):
     res = api.get_next_leaderboard_position_points("testuser", 50)
     assert res == 60
 
-@patch('api.api_request_with_retry')
+@patch('kovaaks.api.api_request_with_retry')
 def test_get_next_leaderboard_position_points_error(mock_req):
     # Simulate API exception
     mock_req.side_effect = Exception("API rate limited or down")

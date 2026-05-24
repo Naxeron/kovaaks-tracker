@@ -6,11 +6,11 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data_processing import (
+from kovaaks.data_processing import (
     get_estimated_fetch_count,
     get_estimated_matching_count,
 )
-from constants import (
+from kovaaks.constants import (
     SCENARIO_DISTRIBUTION_POINTS,
     SCENARIO_POPULARITY_DROP_OFF_POINTS,
 )
