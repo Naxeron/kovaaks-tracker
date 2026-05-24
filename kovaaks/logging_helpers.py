@@ -1,9 +1,9 @@
 import logging
 import sys
 import os
-from constants import LAUNCH_MARKER
+from .constants import LAUNCH_MARKER
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_FILE = os.path.join(SCRIPT_DIR, "kovaaks.log")
 
 def _trim_log_file(path, keep=2):

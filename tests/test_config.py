@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import config_helpers
+import kovaaks.config_helpers as config_helpers
 
 
 class TestLoadConfig:

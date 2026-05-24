@@ -6,7 +6,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data_processing import natural_sort_key
+from kovaaks.data_processing import natural_sort_key
 
 
 class TestNaturalSortKey:

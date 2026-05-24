@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import logging_helpers
+import kovaaks.logging_helpers as logging_helpers
 
 class TestLoggingDebugMode:
     def test_default_is_not_debug(self):
@@ -37,7 +37,7 @@ class TestLoggingDebugMode:
         # Patch LOG_FILE and is_debug_mode inside logging_helpers
         with patch.object(sys, "argv", ["kovaaks_gui.py"]), \
              patch.dict(os.environ, {}, clear=True), \
-             patch("logging_helpers.LOG_FILE", str(log_file)), \
+             patch("kovaaks.logging_helpers.LOG_FILE", str(log_file)), \
              patch("logging.getLogger") as mock_get_logger:
             
             mock_logger = mock_get_logger.return_value
@@ -54,7 +54,7 @@ class TestLoggingDebugMode:
         # Patch LOG_FILE and is_debug_mode inside logging_helpers to simulate debug mode
         with patch.object(sys, "argv", ["kovaaks_gui.py", "--debug"]), \
              patch.dict(os.environ, {}, clear=True), \
-             patch("logging_helpers.LOG_FILE", str(log_file)), \
+             patch("kovaaks.logging_helpers.LOG_FILE", str(log_file)), \
              patch("logging.getLogger") as mock_get_logger:
             
             mock_logger = mock_get_logger.return_value

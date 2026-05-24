@@ -14,7 +14,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
-from api import (
+from kovaaks.api import (
     api_request_with_retry,
     get_accurate_entry_count,
 )
@@ -22,7 +22,7 @@ from scripts.fetch_scenarios import fetch_all_scenarios as script_fetch_all
 
 
 class TestApiRetryFromModule:
-    @patch("api.requests.get")
+    @patch("kovaaks.api.requests.get")
     def test_success(self, mock_get):
         resp = MagicMock()
         resp.status_code = 200
@@ -31,8 +31,8 @@ class TestApiRetryFromModule:
         result = api_request_with_retry("get", "http://example.com", max_retries=1)
         assert result.status_code == 200
 
-    @patch("api.time.sleep")
-    @patch("api.requests.get")
+    @patch("kovaaks.api.time.sleep")
+    @patch("kovaaks.api.requests.get")
     def test_retry_on_connection_error(self, mock_get, mock_sleep):
         import requests as req
         ok_resp = MagicMock()
@@ -47,14 +47,14 @@ class TestApiRetryFromModule:
 
 
 class TestEntryCountFromModule:
-    @patch("api.api_request_with_retry")
+    @patch("kovaaks.api.api_request_with_retry")
     def test_returns_count(self, mock_req):
         resp = MagicMock()
         resp.json.return_value = {"total": 7777}
         mock_req.return_value = resp
         assert get_accurate_entry_count("lid-test") == 7777
 
-    @patch("api.api_request_with_retry")
+    @patch("kovaaks.api.api_request_with_retry")
     def test_returns_none_on_error(self, mock_req):
         mock_req.side_effect = Exception("boom")
         assert get_accurate_entry_count("lid-fail") is None

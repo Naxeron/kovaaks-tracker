@@ -12,7 +12,7 @@ import sys
 
 logger = logging.getLogger("kovaaks")
 
-SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 
 
