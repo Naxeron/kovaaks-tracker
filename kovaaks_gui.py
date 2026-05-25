@@ -213,8 +213,9 @@ class KovaaksApp(tk.Tk):
             for url in urls:
                 key = url.split("/")[-1]
                 logger.debug("Checking GitHub update for %s...", key)
-                # Use HEAD request to check headers only with retry logic
-                resp = _api_request_with_retry("head", url, timeout=10)
+                # Use HEAD request to check headers only with limited retries
+                # to avoid long blocking when GitHub is flaky
+                resp = _api_request_with_retry("head", url, timeout=10, max_retries=3)
                 if resp.status_code == 200:
                     etag = resp.headers.get("ETag")
                     last_modified = resp.headers.get("Last-Modified")
@@ -277,9 +278,12 @@ class KovaaksApp(tk.Tk):
         if not changed:
             logger.info("Auto-refresh skipped: No updates on GitHub.")
             if self._scenario_info:
-                fake_master = [{"leaderboardId": lid, "counts": {"entries": info.get("entries", 0)}} for lid, info in self._scenario_info.items()]
-                self._record_history_points(fake_master)
-                save_scores_cache(self._scores_cache)
+                # Offload history recording and cache saving to a background
+                # thread — both are CPU/IO heavy and would freeze the GUI.
+                threading.Thread(
+                    target=self._save_history_in_background,
+                    daemon=True,
+                ).start()
             self._update_status("Ready (GitHub up-to-date)")
             self._schedule_next_auto_refresh()
         else:
@@ -288,6 +292,18 @@ class KovaaksApp(tk.Tk):
                 self._on_fetch_all(force_login=False)
             else:
                 self._schedule_next_auto_refresh()
+
+    def _save_history_in_background(self):
+        """Record history points and save cache off the main thread."""
+        try:
+            fake_master = [
+                {"leaderboardId": lid, "counts": {"entries": info.get("entries", 0)}}
+                for lid, info in self._scenario_info.items()
+            ]
+            self._record_history_points(fake_master)
+            save_scores_cache(self._scores_cache)
+        except Exception as e:
+            logger.warning("Error saving history in background: %s", e)
 
     def _schedule_next_auto_refresh(self):
         if self._auto_refresh_id:
