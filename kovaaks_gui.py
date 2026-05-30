@@ -91,6 +91,7 @@ class KovaaksApp(tk.Tk):
         self.configure(bg=BG)
 
         self._cfg = load_config()
+        self._hidden_scenarios = set(self._cfg.get("hidden_scenarios", []))
 
         self._all_data: list[dict] = []
         self._tree: ttk.Treeview | None = None
@@ -421,6 +422,7 @@ class KovaaksApp(tk.Tk):
             ("friends_only", "👥 Friends Only"),
             ("me_only", "🙋 Me Only"),
             ("unplayed", "❌ Unplayed"),
+            ("hidden", "👁️ Hidden"),
         ]:
             var = tk.BooleanVar(value=False)
             self._filters[filter_key] = var
@@ -477,8 +479,8 @@ class KovaaksApp(tk.Tk):
         # Enter key → play selected scenario
         self._tree.bind("<Return>", lambda e: self._play_scenario())
 
-        # Right-click → column visibility menu
-        self._tree.bind("<Button-3>", self._show_column_menu)
+        # Right-click → context menus
+        self._tree.bind("<Button-3>", self._on_right_click)
 
         # Apply saved column visibility
         self._refresh_columns(save=False)
@@ -1156,10 +1158,18 @@ class KovaaksApp(tk.Tk):
 
         SCENARIO_BLACKLIST = {
         }
+        
+        show_hidden = self._filters.get("hidden").get() if "hidden" in self._filters else False
 
         for lid, info in scenario_info.items():
             sname = info["name"]
             if sname in SCENARIO_BLACKLIST:
+                continue
+                
+            is_hidden = lid in self._hidden_scenarios
+            if show_hidden and not is_hidden:
+                continue
+            if not show_hidden and is_hidden:
                 continue
 
             has_user = lid in user_by_lid
@@ -1445,6 +1455,61 @@ class KovaaksApp(tk.Tk):
             if len(active) == 1:
                 return FILTER_HIDDEN_COLS.get(active[0], set())
         return set()
+
+    def _on_right_click(self, event):
+        """Handle right-click on the treeview to show context menus."""
+        region = self._tree.identify_region(event.x, event.y)
+        if region == "heading":
+            self._show_column_menu(event)
+        elif region == "cell":
+            self._show_row_menu(event)
+
+    def _show_row_menu(self, event):
+        """Show context menu for a specific row."""
+        row_id = self._tree.identify_row(event.y)
+        if not row_id:
+            return
+            
+        self._tree.selection_set(row_id)
+        values = self._tree.item(row_id, "values")
+        if not values:
+            return
+            
+        sname = values[1]
+        lid = None
+        for k, v in self._scenario_info.items():
+            if v["name"] == sname:
+                lid = k
+                break
+                
+        if not lid:
+            return
+            
+        menu = tk.Menu(self, tearoff=0, bg=BG_LIGHTER, fg=TEXT,
+                       activebackground=ACCENT, activeforeground="#fff",
+                       font=("Segoe UI", 9), bd=1, relief="solid")
+                       
+        menu.add_command(label="📋 Copy Scenario Name", command=lambda: self._copy_scenario_name(event))
+        
+        if lid in self._hidden_scenarios:
+            menu.add_command(label="👁️ Unhide Scenario", command=lambda: self._toggle_hide_scenario(lid))
+        else:
+            menu.add_command(label="👁️ Hide Scenario", command=lambda: self._toggle_hide_scenario(lid))
+            
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _toggle_hide_scenario(self, lid):
+        """Toggle the hidden status of a scenario."""
+        if lid in self._hidden_scenarios:
+            self._hidden_scenarios.remove(lid)
+            self._update_status("Scenario unhidden.")
+        else:
+            self._hidden_scenarios.add(lid)
+            self._update_status("Scenario hidden.")
+            
+        self._cfg["hidden_scenarios"] = list(self._hidden_scenarios)
+        save_config(self._cfg)
+        self._rebuild_data()
 
     def _show_column_menu(self, event):
         """Show a context menu to toggle column visibility."""
