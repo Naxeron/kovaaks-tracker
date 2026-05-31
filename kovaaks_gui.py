@@ -426,7 +426,10 @@ class KovaaksApp(tk.Tk):
         ]:
             var = tk.BooleanVar(value=False)
             self._filters[filter_key] = var
-            self._make_toggle_button(toggle_frame, label_text, var)
+            if filter_key == "hidden":
+                self._make_toggle_button(toggle_frame, label_text, var, on_toggle=self._rebuild_data)
+            else:
+                self._make_toggle_button(toggle_frame, label_text, var)
 
         # Spacer
         tk.Frame(toggle_frame, bg=BG, width=16).pack(side="left")
@@ -572,7 +575,7 @@ class KovaaksApp(tk.Tk):
         self._all_buttons.append(btn)
         return btn
 
-    def _make_toggle_button(self, parent, text, var):
+    def _make_toggle_button(self, parent, text, var, on_toggle=None):
         """Create a toggle button that highlights when active."""
         btn = tk.Button(
             parent, text=text,
@@ -586,7 +589,10 @@ class KovaaksApp(tk.Tk):
                 btn.configure(bg=ACCENT, fg="#fff")
             else:
                 btn.configure(bg=BG_LIGHTER, fg=TEXT_DIM)
-            self._apply_filter()
+            if on_toggle:
+                on_toggle()
+            else:
+                self._apply_filter()
 
         btn.configure(command=toggle)
         btn.pack(side="left", padx=(0, 6), pady=(0, 6))
