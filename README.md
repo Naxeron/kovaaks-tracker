@@ -18,7 +18,7 @@ A vibe-coded tracker for KovaaKs. Built for rank farming, sniping friends, and o
    pip install requests
    ```
 2. **Run**: `python kovaaks_gui.py`
-3. **Login**: Click ⚙ to enter your KovaaKs credentials.
+3. **Login**: Enter your KovaaKs credentials.
 
 ## Controls
 
@@ -30,8 +30,7 @@ A vibe-coded tracker for KovaaKs. Built for rank farming, sniping friends, and o
 
 ## Credits
 
-- **evxl.app** - For making an actually good functional website using the mess that is the KovaaKs API: [https://evxl.app/](https://evxl.app/)
-- **KovaaKs** - For blessing gamers with an aim trainer.
+- **evxl.app** - For making an actually functional website using the mess that is the KovaaKs API: [https://evxl.app/](https://evxl.app/)
 
 ---
 *Open an issue if you hit bugs or have ideas. I might be slow to respond, depends on how I feel, my Antigravity quota and if I'm actively playing.*
