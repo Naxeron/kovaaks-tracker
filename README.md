@@ -2,6 +2,8 @@
 
 A vibe-coded tracker for KovaaKs. Built for rank farming, sniping friends, and optimizing your practice.
 
+![KovaaKs Scenario Tracker Screenshot](screenshot.png)
+
 ## Features
 
 - **Rank Tracking** — Live updates via KovaaKs API with accurate stats (unlike the official website).
