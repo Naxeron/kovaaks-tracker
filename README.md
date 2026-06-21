@@ -36,3 +36,5 @@ A vibe-coded tracker for KovaaKs. Built for rank farming, sniping friends, and o
 
 ---
 *Open an issue if you hit bugs or have ideas. I might be slow to respond, depends on how I feel, my Antigravity quota and if I'm actively playing.*
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Naxeron/kovaaks-tracker)
