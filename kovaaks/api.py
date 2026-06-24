@@ -206,6 +206,13 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
     logger.info("Fetched %d total scenarios with accurate counts", len(all_data))
     return all_data
 
+def _get_pts(item, default=0):
+    val = item.get("points")
+    try:
+        return float(val) if val is not None else default
+    except (TypeError, ValueError):
+        return default
+
 def get_next_leaderboard_position_points(username, local_points, session=None):
     """Finds the score of the player strictly above the user's score on the global leaderboard."""
     url = "https://kovaaks.com/webapp-backend/leaderboard/global/scores"
@@ -217,8 +224,8 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
             user_lower = username.lower()
             for i, item in enumerate(items):
                 if user_lower in (item.get("webappUsername", "").lower(), item.get("steamAccountName", "").lower()):
-                    return items[i-1].get("points", local_points) if i > 0 else local_points
-            if items and local_points >= items[0].get("points", 0):
+                    return _get_pts(items[i-1], local_points) if i > 0 else local_points
+            if items and local_points >= _get_pts(items[0], 0):
                 return local_points
     except Exception as e:
         logger.warning("Failed to fetch top 100 for global leaderboard: %s", e)
@@ -241,10 +248,10 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
                 if not items:
                     break
                     
-                first_score_on_page = items[0].get("points", 0)
-                last_score_on_page = items[-1].get("points", 0)
+                first_score_on_page = _get_pts(items[0], 0)
+                last_score_on_page = _get_pts(items[-1], 0)
                 
-                if candidates := [it.get("points", 0) for it in items if it.get("points", 0) > target_points]:
+                if candidates := [_get_pts(it, 0) for it in items if _get_pts(it, 0) > target_points]:
                     best_points_above = min(best_points_above, candidates[-1]) if best_points_above is not None else candidates[-1]
                         
                 if target_points > first_score_on_page:
