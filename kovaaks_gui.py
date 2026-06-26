@@ -1092,7 +1092,7 @@ class KovaaksApp(tk.Tk):
         if self._next_global_points is None:
             return
             
-        diff = self._next_global_points - self._global_points_sum
+        diff = int(self._next_global_points - self._global_points_sum)
         self._next_rank_var.set(f"Next Rank: +{diff:,}")
         
         # Calculate unplayed needed
