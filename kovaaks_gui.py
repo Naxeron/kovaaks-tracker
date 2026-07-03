@@ -495,17 +495,6 @@ class KovaaksApp(tk.Tk):
         self._log_drag_start_y = None
         self._log_drag_start_h = None
 
-        # Resize handle (drag bar at top of log frame)
-        self._log_resize_handle = tk.Frame(self._log_frame, bg=BG, height=8, cursor="sb_v_double_arrow")
-        self._log_grip = tk.Frame(self._log_resize_handle, bg=BORDER, width=40, height=4, cursor="sb_v_double_arrow")
-        self._log_grip.place(relx=0.5, rely=0.5, anchor="center")
-        
-        for w in (self._log_resize_handle, self._log_grip):
-            w.bind("<ButtonPress-1>", self._log_resize_start)
-            w.bind("<B1-Motion>", self._log_resize_drag)
-            w.bind("<Enter>", lambda e: self._log_grip.configure(bg=ACCENT))
-            w.bind("<Leave>", lambda e: self._log_grip.configure(bg=BORDER))
-
         self._log_header = tk.Frame(self._log_frame, bg=BG)
         self._log_header.pack(fill="x", pady=(8, 6))
         self._log_visible = False
@@ -523,6 +512,19 @@ class KovaaksApp(tk.Tk):
             activeforeground="#fff", font=("Segoe UI", 9, "bold"),
             relief="flat", bd=0, padx=10, pady=4, cursor="hand2")
         clear_btn.pack(side="right")
+
+        # Resize handle (drag bar in the empty space between buttons)
+        self._log_resize_handle = tk.Frame(self._log_header, bg=BG, cursor="sb_v_double_arrow")
+        self._log_resize_handle.pack(side="left", fill="both", expand=True)
+
+        self._log_grip = tk.Frame(self._log_resize_handle, bg=BORDER, width=40, height=4, cursor="sb_v_double_arrow")
+        self._log_grip.place(relx=0.5, rely=1.0, y=-2, anchor="s")
+        
+        for w in (self._log_resize_handle, self._log_grip):
+            w.bind("<ButtonPress-1>", self._log_resize_start)
+            w.bind("<B1-Motion>", self._log_resize_drag)
+            w.bind("<Enter>", lambda e: self._log_grip.configure(bg=ACCENT))
+            w.bind("<Leave>", lambda e: self._log_grip.configure(bg=BORDER))
 
         self._log_text_container = tk.Frame(
             self._log_frame, bg=LOG_BG,
@@ -1602,8 +1604,8 @@ class KovaaksApp(tk.Tk):
             self._log_resize_handle.pack_forget()
             self._log_toggle_btn.configure(text="▶ Log")
         else:
-            # Re-pack resize handle at top, then text container
-            self._log_resize_handle.pack(fill="x", before=self._log_header)
+            # Re-pack resize handle and text container
+            self._log_resize_handle.pack(side="left", fill="both", expand=True)
             self._log_text_container.pack(fill="both", padx=0, pady=(0, 4))
             self._log_text_container.configure(height=self._log_height)
             self._log_text_container.pack_propagate(False)
