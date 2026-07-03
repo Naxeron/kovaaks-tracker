@@ -42,7 +42,7 @@ COLUMNS = [
     ("My Score", 85),
     ("Percentile", 80),
     ("Score Date", 95),
-    ("Best Friend", 130),
+    ("Top Friend", 130),
     ("Friend Rank", 80),
     ("Friend Score", 90),
     ("Friend Percentile", 95),
@@ -57,11 +57,11 @@ COLUMNS = [
 FILTER_HIDDEN_COLS = {
     "friends_only": {"My Rank", "My Score", "Percentile", "Score Date",
                      "Rank Diff", "Pctile Diff"},
-    "me_only":      {"Best Friend", "Friend Rank", "Friend Score",
+    "me_only":      {"Top Friend", "Friend Rank", "Friend Score",
                      "Friend Percentile", "Friend Score Date",
                      "Rank Diff", "Pctile Diff"},
     "unplayed":     {"My Rank", "My Score", "Percentile", "Score Date",
-                     "Best Friend", "Friend Rank", "Friend Score",
+                     "Top Friend", "Friend Rank", "Friend Score",
                      "Friend Percentile", "Friend Score Date",
                      "Rank Diff", "Pctile Diff", "Local Runs", "Potential"},
 }

@@ -994,7 +994,7 @@ class KovaaksApp(tk.Tk):
                 matched = set()
                 for idx, r in enumerate(all_rows):
                     has_rank = r.get("My Rank", "") != ""
-                    has_friend = r.get("Best Friend", "") != ""
+                    has_friend = r.get("Top Friend", "") != ""
                     rank_diff = r.get("Rank Diff", "")
 
                     if losing and has_rank and has_friend and rank_diff:
@@ -1272,7 +1272,7 @@ class KovaaksApp(tk.Tk):
                 row["My Rank"] = str(user_by_lid[lid]["rank"]) if has_user else ""
                 row["My Score"] = str(user_by_lid[lid]["score"]) if has_user else ""
                 row["Score Date"] = user_by_lid[lid].get("date", "") if has_user else ""
-                row["Best Friend"] = best[0] if best else ""
+                row["Top Friend"] = best[0] if best else ""
                 row["Friend Rank"] = str(best[1]) if best else ""
                 row["Friend Score"] = str(best[2]) if best else ""
                 row["Friend Score Date"] = best[3] if best else ""
@@ -1355,7 +1355,7 @@ class KovaaksApp(tk.Tk):
                 row["My Score"] = ""
                 row["Percentile"] = ""
                 row["Score Date"] = ""
-                row["Best Friend"] = ""
+                row["Top Friend"] = ""
                 row["Friend Rank"] = ""
                 row["Friend Score"] = ""
                 row["Friend Percentile"] = ""
