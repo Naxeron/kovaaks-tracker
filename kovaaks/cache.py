@@ -24,7 +24,7 @@ def load_scores_cache():
             data = json.load(f)
         logger.info("Loaded cache from %s", SCORES_CACHE)
         return data
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, OSError, EOFError) as e:
         logger.warning("Could not load cache: %s", e)
         return {}
 
