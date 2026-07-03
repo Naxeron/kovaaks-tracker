@@ -291,8 +291,7 @@ class KovaaksApp(tk.Tk):
             username = self._cfg.get("username", "").strip()
             if username:
                 self._on_fetch_all(force_login=False)
-            else:
-                self._schedule_next_auto_refresh()
+            self._schedule_next_auto_refresh()
 
     def _save_history_in_background(self):
         """Record history points and save cache off the main thread."""
