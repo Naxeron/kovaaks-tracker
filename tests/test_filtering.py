@@ -19,7 +19,7 @@ def _make_row(scenario, my_rank="", best_friend="", rank_diff="", **extra):
         "My Score": extra.get("my_score", ""),
         "Percentile": extra.get("percentile", ""),
         "Score Date": extra.get("score_date", ""),
-        "Best Friend": best_friend,
+        "Top Friend": best_friend,
         "Friend Rank": extra.get("friend_rank", ""),
         "Friend Score": extra.get("friend_score", ""),
         "Friend Percentile": extra.get("friend_percentile", ""),
@@ -45,7 +45,7 @@ def _apply_filter_logic(all_rows, losing=False, friends_only=False,
         matched = set()
         for idx, r in enumerate(all_rows):
             has_rank = r.get("My Rank", "") != ""
-            has_friend = r.get("Best Friend", "") != ""
+            has_friend = r.get("Top Friend", "") != ""
             rank_diff = r.get("Rank Diff", "")
 
             if losing and has_rank and has_friend and rank_diff:

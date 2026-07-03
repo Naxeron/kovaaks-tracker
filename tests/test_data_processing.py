@@ -193,7 +193,7 @@ class TestRebuildDataRows:
             app._rebuild_data()
 
         row = app._all_data[0]
-        assert row["Best Friend"] == "Fast"
+        assert row["Top Friend"] == "Fast"
         assert row["Friend Rank"] == "10"
 
     def test_potential_score_computed_for_played(self):
