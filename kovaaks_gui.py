@@ -338,7 +338,7 @@ class KovaaksApp(tk.Tk):
         style.map("Dark.Treeview.Heading", background=[("active", ACCENT)])
         style.configure("Dark.TFrame", background=BG)
         style.configure("Dark.TLabel", background=BG, foreground=TEXT, font=("Segoe UI", 10))
-        style.configure("Status.TLabel", background=BG_DARKER, foreground=TEXT_DIM, font=("Segoe UI", 9), padding=[8, 4])
+        style.configure("Status.TLabel", background=BG, foreground=TEXT_DIM, font=("Segoe UI", 9), padding=[0, 4])
         style.configure("Title.TLabel", background=BG, foreground=ACCENT, font=("Segoe UI", 18, "bold"))
         style.configure("Dark.Vertical.TScrollbar", background=BG_LIGHTER, troughcolor=BG_DARKER, arrowcolor=TEXT)
 
@@ -488,7 +488,7 @@ class KovaaksApp(tk.Tk):
         self._refresh_columns(save=False)
 
         # — Log panel (collapsible + resizable) —
-        self._log_frame = tk.Frame(self, bg=BG_DARKER)
+        self._log_frame = tk.Frame(self, bg=BG)
         self._log_height = 160  # default height in pixels
         self._log_min_height = 60
         self._log_max_height = 500
@@ -496,38 +496,43 @@ class KovaaksApp(tk.Tk):
         self._log_drag_start_h = None
 
         # Resize handle (drag bar at top of log frame)
-        self._log_resize_handle = tk.Frame(self._log_frame, bg=BORDER, height=4, cursor="sb_v_double_arrow")
-        self._log_resize_handle.pack(fill="x")
-        self._log_resize_handle.bind("<ButtonPress-1>", self._log_resize_start)
-        self._log_resize_handle.bind("<B1-Motion>", self._log_resize_drag)
-        self._log_resize_handle.bind("<Enter>", lambda e: self._log_resize_handle.configure(bg=ACCENT))
-        self._log_resize_handle.bind("<Leave>", lambda e: self._log_resize_handle.configure(bg=BORDER))
+        self._log_resize_handle = tk.Frame(self._log_frame, bg=BG, height=8, cursor="sb_v_double_arrow")
+        self._log_grip = tk.Frame(self._log_resize_handle, bg=BORDER, width=40, height=4, cursor="sb_v_double_arrow")
+        self._log_grip.place(relx=0.5, rely=0.5, anchor="center")
+        
+        for w in (self._log_resize_handle, self._log_grip):
+            w.bind("<ButtonPress-1>", self._log_resize_start)
+            w.bind("<B1-Motion>", self._log_resize_drag)
+            w.bind("<Enter>", lambda e: self._log_grip.configure(bg=ACCENT))
+            w.bind("<Leave>", lambda e: self._log_grip.configure(bg=BORDER))
 
-        self._log_header = tk.Frame(self._log_frame, bg=BG_DARKER)
-        self._log_header.pack(fill="x")
+        self._log_header = tk.Frame(self._log_frame, bg=BG)
+        self._log_header.pack(fill="x", pady=(8, 6))
         self._log_visible = False
 
         self._log_toggle_btn = tk.Button(
             self._log_header, text="▼ Log", command=self._toggle_log,
-            bg=BG_DARKER, fg=TEXT_DIM, activebackground=BG_LIGHTER,
-            activeforeground=TEXT, font=("Segoe UI", 9, "bold"),
-            relief="flat", bd=0, padx=8, pady=2, cursor="hand2",
-            anchor="w")
+            bg=BG_LIGHTER, fg=TEXT_DIM, activebackground=ACCENT,
+            activeforeground="#fff", font=("Segoe UI", 9, "bold"),
+            relief="flat", bd=0, padx=10, pady=4, cursor="hand2")
         self._log_toggle_btn.pack(side="left")
 
         clear_btn = tk.Button(
             self._log_header, text="Clear", command=self._clear_log,
-            bg=BG_DARKER, fg=TEXT_DIM, activebackground=BG_LIGHTER,
-            activeforeground=TEXT, font=("Segoe UI", 8),
-            relief="flat", bd=0, padx=6, pady=2, cursor="hand2")
+            bg=BG_LIGHTER, fg=TEXT_DIM, activebackground=ACCENT,
+            activeforeground="#fff", font=("Segoe UI", 9, "bold"),
+            relief="flat", bd=0, padx=10, pady=4, cursor="hand2")
         clear_btn.pack(side="right")
 
-        # Log text inside a container so we can control height
-        self._log_text_container = tk.Frame(self._log_frame, bg=LOG_BG)
+        self._log_text_container = tk.Frame(
+            self._log_frame, bg=LOG_BG,
+            highlightthickness=1, highlightbackground="#ffffff", highlightcolor="#ffffff"
+        )
 
         self._log_text = tk.Text(
             self._log_text_container, bg=LOG_BG, fg=LOG_FG,
-            font=("Consolas", 9), relief="flat", bd=4,
+            font=("Consolas", 9), relief="flat", bd=0, highlightthickness=0,
+            padx=4, pady=4,
             insertbackground=LOG_FG, wrap="word", state="disabled")
 
         log_scrollbar = ttk.Scrollbar(
@@ -541,7 +546,7 @@ class KovaaksApp(tk.Tk):
         # Start collapsed — text container hidden
         # (don't pack _log_text_container yet)
 
-        self._log_frame.pack(fill="x", side="bottom")
+        self._log_frame.pack(fill="x", side="bottom", padx=12, pady=(0, 8))
 
         # — Log toggle starts collapsed —
         self._log_toggle_btn.configure(text="▶ Log")
@@ -549,7 +554,7 @@ class KovaaksApp(tk.Tk):
 
         # — Progress Bar (Sleek Custom) —
         self._progress_bg = tk.Frame(self, bg=BG_DARKER, height=5)
-        self._progress_bg.pack(fill="x", side="bottom")
+        self._progress_bg.pack(fill="x", side="bottom", padx=12, pady=(0, 8))
         self._progress_fill = tk.Frame(self._progress_bg, bg=ACCENT, height=5)
         self._progress_fill.place(x=0, y=0, relwidth=0.0, relheight=1.0)
 
@@ -561,7 +566,7 @@ class KovaaksApp(tk.Tk):
         # — Status bar —
         self._status_var = tk.StringVar(value="Ready")
         status = ttk.Label(self, textvariable=self._status_var, style="Status.TLabel")
-        status.pack(fill="x", side="bottom")
+        status.pack(fill="x", side="bottom", padx=12, pady=(0, 4))
 
     def _make_button(self, parent, text, command):
         btn = tk.Button(
@@ -1599,7 +1604,7 @@ class KovaaksApp(tk.Tk):
         else:
             # Re-pack resize handle at top, then text container
             self._log_resize_handle.pack(fill="x", before=self._log_header)
-            self._log_text_container.pack(fill="both", padx=4, pady=(0, 4))
+            self._log_text_container.pack(fill="both", padx=0, pady=(0, 4))
             self._log_text_container.configure(height=self._log_height)
             self._log_text_container.pack_propagate(False)
             self._log_toggle_btn.configure(text="▼ Log")
