@@ -941,6 +941,15 @@ window.onLocalScoreDetected = function(scenarioName) {
     }
 };
 
+window.onZombieDetected = function(scenarioName) {
+    if (autoplayActive && autoplayCurrentScenario && scenarioName === autoplayCurrentScenario) {
+        if (window.pywebview && window.pywebview.api) {
+            window.pywebview.api.update_status(`Autoplay: '${scenarioName}' is a zombie scenario, advancing…`);
+        }
+        autoplayAdvance();
+    }
+};
+
 function autoplayAdvance() {
     if (!autoplayActive) return;
     if (filteredRows.length === 0) {

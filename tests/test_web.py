@@ -341,3 +341,56 @@ def test_handle_new_stats_files_retries_when_user_entry_none(
         assert mock_get_scores.call_count == 2
         # Verify cache saved successfully
         mock_save_cache.assert_called_once()
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+def test_play_scenario_zombie_notifies_frontend(mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {
+        "scenarios": [],
+        "scores": {},
+        "entry_history": {},
+        "zombies": ["pasuvoltaiceasy"]
+    }
+
+    api = KovaaksAPI()
+    mock_window = MagicMock()
+    api.set_window(mock_window)
+
+    res = api.play_scenario("Pasu Voltaic Easy")
+    assert res is True
+
+    # Verify frontend is notified about the zombie scenario
+    calls = [c[0][0] for c in mock_window.evaluate_js.call_args_list]
+    assert any("onZombieDetected" in call and "Pasu Voltaic Easy" in call for call in calls)
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+def test_play_scenario_bg_zombie_notifies_frontend(mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {
+        "scenarios": [],
+        "scores": {},
+        "entry_history": {},
+        "zombies": []
+    }
+
+    api = KovaaksAPI()
+    mock_window = MagicMock()
+    api.set_window(mock_window)
+
+    # Mock is_scenario_zombie to return True (simulating a discovered zombie in the bg check)
+    with patch("kovaaks.api.is_scenario_zombie", return_value=True), \
+         patch("threading.Thread", SyncThread), \
+         patch("webbrowser.open") as mock_webbrowser_open, \
+         patch("kovaaks.cache.save_scores_cache") as mock_save:
+        res = api.play_scenario("Pasu Voltaic Easy")
+        assert res is True
+        mock_webbrowser_open.assert_called_once()
+        
+        # Verify frontend was notified that the zombie was detected
+        calls = [c[0][0] for c in mock_window.evaluate_js.call_args_list]
+        assert any("onZombieDetected" in call and "Pasu Voltaic Easy" in call for call in calls)
+        assert any("fetchData" in call for call in calls)
