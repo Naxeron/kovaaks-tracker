@@ -1461,12 +1461,39 @@ class KovaaksApp(tk.Tk):
     # Column visibility
     # -------------------------------------------------------------------
     def _get_auto_hidden_cols(self):
-        """Return the set of columns auto-hidden by the current filter."""
+        """Return the set of columns auto-hidden by the current filter or because they are empty."""
+        auto_hidden = set()
         if self._filters:
             active = [k for k, v in self._filters.items() if v.get()]
             if len(active) == 1:
-                return FILTER_HIDDEN_COLS.get(active[0], set())
-        return set()
+                auto_hidden.update(FILTER_HIDDEN_COLS.get(active[0], set()))
+
+        # Check dynamic empty columns
+        children = self._tree.get_children()
+        if children:
+            cols = [c[0] for c in COLUMNS]
+            # Initialize empty flags
+            is_empty = {col: True for col in cols}
+            # Scenario and play button are never considered empty/hidden
+            is_empty["▶"] = False
+            is_empty["Scenario"] = False
+
+            for child in children:
+                vals = self._tree.item(child, "values")
+                if not vals:
+                    continue
+                for idx, val in enumerate(vals):
+                    if idx < len(cols):
+                        col_name = cols[idx]
+                        if col_name in is_empty and is_empty[col_name]:
+                            if str(val).strip() != "":
+                                is_empty[col_name] = False
+
+            for col_name, empty in is_empty.items():
+                if empty:
+                    auto_hidden.add(col_name)
+
+        return auto_hidden
 
     def _on_right_click(self, event):
         """Handle right-click on the treeview to show context menus."""
