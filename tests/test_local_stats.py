@@ -73,3 +73,66 @@ class TestGetLocalStats:
         result = _get_local_stats(stats_dir)
         for data in result.values():
             assert "recent_scores" not in data
+
+    def test_incremental_stats_cache(self, tmp_path):
+        """Test that get_local_stats uses the cached stats and updates correctly."""
+        stats_dir = tmp_path / "stats"
+        stats_dir.mkdir()
+        
+        # Write first stat file
+        f1 = stats_dir / "1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv"
+        f1.write_text("Score:,100.5\n", encoding="utf-8")
+        
+        cache = {
+            "known_stat_files": [],
+            "local_stats": {}
+        }
+        
+        # First call: populates cache
+        res1 = _get_local_stats(str(stats_dir), cache)
+        assert "1w6ts Reload" in res1
+        assert res1["1w6ts Reload"]["count"] == 1
+        assert "1w6ts Reload" in cache["local_stats"]
+        assert cache["local_stats"]["1w6ts Reload"]["count"] == 1
+        assert f1.name in cache["known_stat_files"]
+        
+        # Second call with no changes: should not read file again (we modify the file on disk to verify)
+        f1.write_text("Score:,999.0\n", encoding="utf-8")
+        res2 = _get_local_stats(str(stats_dir), cache)
+        assert cache["local_stats"]["1w6ts Reload"]["recent_scores"][0][1] == 100.5
+        
+        # Write second stat file
+        f2 = stats_dir / "1w6ts Reload - Challenge - 2026.05.10-13.00.00 Stats.csv"
+        f2.write_text("Score:,120.0\n", encoding="utf-8")
+        
+        # Third call: parses only new file
+        res3 = _get_local_stats(str(stats_dir), cache)
+        assert res3["1w6ts Reload"]["count"] == 2
+        assert f2.name in cache["known_stat_files"]
+        
+        # Check that recent scores contains both the old cached score and the new score
+        recent = cache["local_stats"]["1w6ts Reload"]["recent_scores"]
+        assert len(recent) == 2
+        assert recent[0][1] == 100.5
+        assert recent[1][1] == 120.0
+
+    def test_dynamic_runs_today(self, tmp_path):
+        """Test that runs_today is dynamically calculated correctly relative to now."""
+        stats_dir = tmp_path / "stats"
+        stats_dir.mkdir()
+        
+        # Write a file played today
+        now = datetime.datetime.now()
+        now_str = now.strftime("%Y.%m.%d-%H.%M.%S")
+        f1 = stats_dir / f"1w6ts Reload - Challenge - {now_str} Stats.csv"
+        f1.write_text("Score:,100.0\n", encoding="utf-8")
+        
+        # Write a file played 2 days ago
+        two_days_ago = now - datetime.timedelta(days=2)
+        old_str = two_days_ago.strftime("%Y.%m.%d-%H.%M.%S")
+        f2 = stats_dir / f"1w6ts Reload - Challenge - {old_str} Stats.csv"
+        f2.write_text("Score:,95.0\n", encoding="utf-8")
+        
+        res = _get_local_stats(str(stats_dir))
+        assert res["1w6ts Reload"]["count"] == 2
+        assert res["1w6ts Reload"]["runs_today"] == 1

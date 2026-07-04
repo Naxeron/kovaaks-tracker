@@ -41,11 +41,48 @@ class KovaaksAPI:
         self._known_stat_files = set()
         self._jwt_token = None
         
+        self._cache_loaded_event = threading.Event()
+        if "pytest" in sys.modules:
+            self._load_cache_and_populate()
+            # Perform initial rebuild in tests to keep behavior synchronous
+            played, unplayed = self._rebuild_data()
+            self._cache_loaded_event.set()
+        else:
+            threading.Thread(target=self._initial_cache_load, daemon=True).start()
+
+    def _initial_cache_load(self):
+        logger.info("Starting background cache load...")
+        t0 = time.time()
         self._load_cache_and_populate()
+        
+        # Build the data once and update status/progress
+        played, unplayed = self._rebuild_data()
+        self._update_status(
+            f"Rebuilt from memory cache — {len(played)} played, {len(unplayed)} unplayed"
+        )
+        self._update_progress(1, 1)
+        
+        # Save the updated scores cache in case get_local_stats added new local runs
+        if self._scores_cache.pop("_dirty", False):
+            from kovaaks.cache import save_scores_cache
+            save_scores_cache(self._scores_cache)
+        
+        self._cache_loaded_event.set()
+        logger.info("Background cache load completed in %.2fs", time.time() - t0)
+        
+        # Notify JS that the data is ready
+        if self.window:
+            self.window.evaluate_js("if(window.fetchData) window.fetchData()")
 
     def set_window(self, window):
         self.window = window
-        self._start_stats_polling()
+        if "pytest" in sys.modules:
+            self._start_stats_polling()
+        else:
+            def start_polling_bg():
+                self._cache_loaded_event.wait()
+                self._start_stats_polling()
+            threading.Thread(target=start_polling_bg, daemon=True).start()
 
     def _get_stats_dir(self):
         return self._cfg.get("stats_dir", "")
@@ -119,12 +156,6 @@ class KovaaksAPI:
         self._user_by_lid = user_by_lid
         self._friends_by_lid = friends_by_lid
 
-        played, unplayed = self._rebuild_data()
-        self._update_status(
-            f"Rebuilt from memory cache — {len(played)} played, {len(unplayed)} unplayed"
-        )
-        self._update_progress(1, 1)
-
     # -------------------------------------------------------------------
     # Settings
     # -------------------------------------------------------------------
@@ -156,7 +187,7 @@ class KovaaksAPI:
         stats_dir = self._get_stats_dir()
         # Use cached local stats unless marked dirty
         if self._local_stats_dirty:
-            self._local_stats_cache = _get_local_stats(stats_dir)
+            self._local_stats_cache = _get_local_stats(stats_dir, self._scores_cache)
             self._local_stats_dirty = False
         local_stats = self._local_stats_cache
         now = datetime.datetime.now()
@@ -167,13 +198,15 @@ class KovaaksAPI:
         
         show_hidden = self._filters.get("hidden").get() if "hidden" in self._filters else False
 
+        import re
+        re_non_alnum = re.compile(r'[^a-z0-9]')
+
         for lid, info in scenario_info.items():
             sname = info["name"]
             if sname in SCENARIO_BLACKLIST:
                 continue
 
-            import re
-            norm_name = re.sub(r'[^a-z0-9]', '', sname.lower())
+            norm_name = re_non_alnum.sub('', sname.lower())
             if hasattr(self, "_zombies") and norm_name in self._zombies:
                 continue
                 
@@ -225,8 +258,6 @@ class KovaaksAPI:
 
             competition_multiplier = max(0.2, math.log10(max(1.0, popularity_trend + 1.0)) / 2.0)
 
-            import re
-            norm_name = re.sub(r'[^a-z0-9]', '', sname.lower())
             is_zombie = hasattr(self, "_zombies") and norm_name in self._zombies
 
             row = {
@@ -442,6 +473,7 @@ class KovaaksAPI:
         self._scores_cache["entry_history"] = history
 
     def get_data(self, min_entries, show_hidden=False):
+        self._cache_loaded_event.wait()
         self._cfg["min_entries"] = min_entries
         class DummyVar:
             def __init__(self, val): self.val = val

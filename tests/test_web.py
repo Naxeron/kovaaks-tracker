@@ -108,13 +108,21 @@ def test_start_stats_polling_with_new_files(
         "known_stat_files": ["1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv"]
     }
     mock_exists.return_value = True
+    # Start with only the known file during initialization
+    mock_listdir.return_value = [
+        "1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv",
+        "some_other_file.txt",
+    ]
+
+    api = KovaaksAPI()
+    
+    # Simulate a new file being added to the directory after initialization
     mock_listdir.return_value = [
         "1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv",
         "1w6ts Reload - Challenge - 2026.05.10-13.00.00 Stats.csv",
         "some_other_file.txt",
     ]
-
-    api = KovaaksAPI()
+    
     mock_thread.reset_mock()
     mock_save.reset_mock()
     
