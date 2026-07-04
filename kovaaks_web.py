@@ -705,8 +705,14 @@ class KovaaksAPI:
                         return
                     api_ref._known_stat_files.add(fname)
                     api_ref._scores_cache["known_stat_files"] = list(api_ref._known_stat_files)
+                    
+                    # Save cache in the background to avoid blocking the file event handler thread
                     from kovaaks.cache import save_scores_cache
-                    save_scores_cache(api_ref._scores_cache)
+                    threading.Thread(
+                        target=save_scores_cache,
+                        args=(api_ref._scores_cache,),
+                        daemon=True
+                    ).start()
 
                     api_ref._local_stats_dirty = True
                     threading.Thread(
@@ -758,8 +764,14 @@ class KovaaksAPI:
                 if new_files:
                     self._known_stat_files.update(new_files)
                     self._scores_cache["known_stat_files"] = list(self._known_stat_files)
+                    
+                    # Save cache in the background to avoid blocking the polling thread
                     from kovaaks.cache import save_scores_cache
-                    save_scores_cache(self._scores_cache)
+                    threading.Thread(
+                        target=save_scores_cache,
+                        args=(self._scores_cache,),
+                        daemon=True
+                    ).start()
                     
                     self._local_stats_dirty = True
                     threading.Thread(
@@ -920,10 +932,15 @@ class KovaaksAPI:
                     time.sleep(retry_wait)
                 
         if updated:
-            save_scores_cache(self._scores_cache)
-            # Notify JS to reload the table data (to show the new API scores)
+            # Notify JS immediately to refresh the table with the new in-memory scores
             if self.window:
                 self.window.evaluate_js("if(window.fetchData) window.fetchData()")
+            # Save the updated scores cache in the background (non-blocking)
+            threading.Thread(
+                target=save_scores_cache,
+                args=(self._scores_cache,),
+                daemon=True
+            ).start()
 
 
 
