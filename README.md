@@ -2,7 +2,7 @@
 
 A vibe-coded tracker for KovaaKs. Built for rank farming, sniping friends, and optimizing your practice.
 
-![KovaaKs Scenario Tracker Screenshot](screenshot_v1.png)
+![KovaaKs Scenario Tracker Screenshot](screenshot_v2.png)
 
 ## Features
 
