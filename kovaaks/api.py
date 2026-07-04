@@ -327,7 +327,7 @@ def is_scenario_zombie(name, stats_dir, cached_zombies=None):
                 pass
 
     # 3. Query Steam Workshop search page
-    quoted_name = urllib.parse.quote_plus(name)
+    quoted_name = urllib.parse.quote_plus(f'"{name}"')
     url = f"https://steamcommunity.com/workshop/browse/?appid=824270&searchtext={quoted_name}&childpublishedfileid=0&browsesort=textsearch&section=readytouseitems"
 
     headers = {
