@@ -471,6 +471,7 @@ class KovaaksApp(tk.Tk):
 
         self._tree.tag_configure("odd", background=ALT_ROW)
         self._tree.tag_configure("even", background=TREE_BG)
+        self._tree.tag_configure("zombie", foreground=TEXT_DIM)
 
         # Double-click → copy scenario name
         self._tree.bind("<Double-1>", self._copy_scenario_name)
@@ -714,15 +715,52 @@ class KovaaksApp(tk.Tk):
         if not values:
             return
         name = values[1]  # Scenario is the second column (after ▶)
-        uri = STEAM_LAUNCH_URI.format(urllib.parse.quote(name, safe=""))
-        webbrowser.open(uri)
 
-        # If autoplay is active, update tracking to this scenario
-        if self._autoplay_var.get():
-            self._autoplay_current_scenario = name
-            self._update_status(f"Autoplay: launching '{name}' — waiting for score…")
-        else:
-            self._update_status(f"Launching: {name}")
+        if not hasattr(self, "_zombies"):
+            self._zombies = set(self._scores_cache.setdefault("zombies", []))
+
+        stats_dir = self._cfg.get("stats_dir", "")
+
+        def check_and_launch():
+            self._update_status(f"Checking scenario availability: {name}...")
+            from kovaaks.api import is_scenario_zombie
+            from kovaaks.cache import save_scores_cache
+
+            try:
+                is_zombie = is_scenario_zombie(name, stats_dir, self._zombies)
+            except Exception as e:
+                logger.error("Error in background zombie check for '%s': %s", name, e)
+                is_zombie = False
+
+            if is_zombie:
+                import re
+                norm_name = re.sub(r'[^a-z0-9]', '', name.lower())
+                if norm_name not in self._zombies:
+                    self._zombies.add(norm_name)
+                    self._scores_cache["zombies"] = list(self._zombies)
+                    save_scores_cache(self._scores_cache)
+
+                self._update_status(f"Error: '{name}' is deleted from Steam Workshop.")
+                logger.warning("Scenario '%s' is a zombie scenario (deleted from Steam Workshop).", name)
+
+                def hide_zombie():
+                    self._rebuild_data()
+                self.after(0, hide_zombie)
+            else:
+                uri = STEAM_LAUNCH_URI.format(urllib.parse.quote(name, safe=""))
+                webbrowser.open(uri)
+
+                def update_success():
+                    # If autoplay is active, update tracking to this scenario
+                    if self._autoplay_var.get():
+                        self._autoplay_current_scenario = name
+                        self._update_status(f"Autoplay: launching '{name}' — waiting for score…")
+                    else:
+                        self._update_status(f"Launching: {name}")
+                self.after(0, update_success)
+
+        import threading
+        threading.Thread(target=check_and_launch, daemon=True).start()
 
     # -------------------------------------------------------------------
     # Cache loading
@@ -730,6 +768,7 @@ class KovaaksApp(tk.Tk):
     def _load_cache_and_populate(self):
         """Load the unified JSON cache and populate tabs with cached data."""
         self._scores_cache = load_scores_cache()
+        self._zombies = set(self._scores_cache.setdefault("zombies", []))
 
         all_scenarios = load_scenarios_from_cache(self._scores_cache)
         if not all_scenarios:
@@ -939,7 +978,8 @@ class KovaaksApp(tk.Tk):
             values = [row.get(c, "") for c in cols]
             values[0] = "▶"  # Play icon in first column
             tag = "odd" if i % 2 else "even"
-            item = self._tree.insert("", "end", values=values, tags=(tag,))
+            tags = (tag, "zombie") if row.get("_is_zombie") else (tag,)
+            item = self._tree.insert("", "end", values=values, tags=tags)
             
             if len(values) > 1 and values[1] in selected_scenarios:
                 items_to_select.append(item)
@@ -1180,6 +1220,11 @@ class KovaaksApp(tk.Tk):
             sname = info["name"]
             if sname in SCENARIO_BLACKLIST:
                 continue
+
+            import re
+            norm_name = re.sub(r'[^a-z0-9]', '', sname.lower())
+            if hasattr(self, "_zombies") and norm_name in self._zombies:
+                continue
                 
             is_hidden = lid in self._hidden_scenarios
             if show_hidden and not is_hidden:
@@ -1229,6 +1274,10 @@ class KovaaksApp(tk.Tk):
 
             competition_multiplier = max(0.2, math.log10(max(1.0, popularity_trend + 1.0)) / 2.0)
 
+            import re
+            norm_name = re.sub(r'[^a-z0-9]', '', sname.lower())
+            is_zombie = hasattr(self, "_zombies") and norm_name in self._zombies
+
             row = {
                 "Scenario": sname,
                 "Entry Count": str(info["entries"]),
@@ -1236,6 +1285,7 @@ class KovaaksApp(tk.Tk):
                 "Trend Mult": f"{competition_multiplier:.2f}x",
                 "Local Runs": str(lstats["count"]),
                 "Potential": "",
+                "_is_zombie": is_zombie,
             }
 
             try:
@@ -1919,6 +1969,15 @@ class KovaaksApp(tk.Tk):
             return
 
         next_idx = current_idx + 1
+        # Skip zombie scenarios in the list
+        while next_idx < len(children):
+            next_iid = children[next_idx]
+            tags = tree.item(next_iid, "tags")
+            if tags and "zombie" in tags:
+                next_idx += 1
+            else:
+                break
+
         if next_idx >= len(children):
             # Reached end of list
             self._autoplay_var.set(False)

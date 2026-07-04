@@ -383,3 +383,10 @@ tr.selected td {
     background-color: var(--primary-red);
     color: white;
 }
+
+tr.zombie-row td {
+    color: #555566 !important;
+    text-decoration: line-through;
+    text-decoration-color: rgba(255, 255, 255, 0.15);
+}
+
