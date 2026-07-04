@@ -183,48 +183,4 @@ class TestFilterLogic:
         assert scenarios == ["ScenD", "ScenE", "ScenF"]
 
 
-class TestAutoHiddenCols:
-    def test_auto_hidden_cols_empty_data(self):
-        """If there are no children in the treeview, it returns an empty set or filter default."""
-        from unittest.mock import MagicMock
-        import kovaaks_gui
-        
-        app = MagicMock()
-        app._filters = {}
-        app._tree = MagicMock()
-        app._tree.get_children.return_value = []
-        
-        res = kovaaks_gui.KovaaksApp._get_auto_hidden_cols(app)
-        assert res == set()
-
-    def test_auto_hidden_cols_with_data(self):
-        """Verify that columns with no non-empty values in the tree are auto-hidden."""
-        from unittest.mock import MagicMock
-        import kovaaks_gui
-        from kovaaks.constants import COLUMNS
-        
-        app = MagicMock()
-        app._filters = {}
-        app._tree = MagicMock()
-        
-        cols = [c[0] for c in COLUMNS]
-        # We populate values: Scenario="ScenA", My Rank="10", My Score="100", Friend columns are empty
-        row_vals = [""] * len(cols)
-        row_vals[cols.index("▶")] = "▶"
-        row_vals[cols.index("Scenario")] = "ScenA"
-        row_vals[cols.index("My Rank")] = "10"
-        row_vals[cols.index("My Score")] = "100"
-        
-        app._tree.get_children.return_value = ["item1"]
-        app._tree.item.return_value = row_vals
-        
-        res = kovaaks_gui.KovaaksApp._get_auto_hidden_cols(app)
-        
-        # Friend-related columns should be in res because they are empty
-        assert "Top Friend" in res
-        assert "Friend Rank" in res
-        # "My Rank" has "10", so it should NOT be in res
-        assert "My Rank" not in res
-        # "Scenario" should never be in res
-        assert "Scenario" not in res
 

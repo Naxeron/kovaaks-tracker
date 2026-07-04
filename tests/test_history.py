@@ -8,14 +8,14 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import kovaaks_gui
+import kovaaks_web
 
 
 def _make_app_stub_for_history(entry_history=None):
     """Create a minimal mock of KovaaksApp for history testing."""
     app = MagicMock()
     app._scores_cache = {"entry_history": entry_history or {}}
-    app._record_history_points = kovaaks_gui.KovaaksApp._record_history_points.__get__(app)
+    app._record_history_points = kovaaks_web.KovaaksAPI._record_history_points.__get__(app)
     return app
 
 

@@ -117,7 +117,8 @@ def kovaaks_login(username, password):
         f"Could not find JWT in login response. Keys: {list(data.keys())}")
 
 
-def kovaaks_get_friends_scores(token, leaderboard_id, session=None):
+def kovaaks_get_friends_scores(token, leaderboard_id, session=None,
+                                timeout=30, max_retries=999):
     """Fetch friends' scores for a given leaderboard ID."""
     url = "https://kovaaks.com/webapp-backend/leaderboard/scores/friends"
     headers = {**KOVAAKS_HEADERS, "Authorization": f"Bearer {token}"}
@@ -125,7 +126,8 @@ def kovaaks_get_friends_scores(token, leaderboard_id, session=None):
         "leaderboardId": leaderboard_id,
         "page": 0,
         "max": 50,
-    }, headers=headers, timeout=30, session=session)
+    }, headers=headers, timeout=timeout, max_retries=max_retries,
+       session=session)
     return resp.json().get("data", [])
 
 

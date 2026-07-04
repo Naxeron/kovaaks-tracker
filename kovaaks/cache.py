@@ -8,11 +8,14 @@ import gzip
 import json
 import logging
 import os
+import threading
 
 logger = logging.getLogger("kovaaks")
 
 PROJECT_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCORES_CACHE = os.path.join(PROJECT_DIR, "data", "scores_cache.json.gz")
+
+_cache_lock = threading.Lock()
 
 
 def load_scores_cache():
@@ -31,18 +34,19 @@ def load_scores_cache():
 
 def save_scores_cache(cache_dict):
     """Save the unified cache dict to gzip-compressed JSON atomically."""
-    tmp_cache = SCORES_CACHE + ".tmp"
-    try:
-        with gzip.open(tmp_cache, "wt", encoding="utf-8") as f:
-            json.dump(cache_dict, f, separators=(",", ":"))
-        os.replace(tmp_cache, SCORES_CACHE)
-    except OSError as e:
-        logger.warning("Could not save cache: %s", e)
-        if os.path.exists(tmp_cache):
-            try:
-                os.remove(tmp_cache)
-            except OSError:
-                pass
+    with _cache_lock:
+        tmp_cache = SCORES_CACHE + ".tmp"
+        try:
+            with gzip.open(tmp_cache, "wt", encoding="utf-8") as f:
+                json.dump(cache_dict, f, separators=(",", ":"))
+            os.replace(tmp_cache, SCORES_CACHE)
+        except OSError as e:
+            logger.warning("Could not save cache: %s", e)
+            if os.path.exists(tmp_cache):
+                try:
+                    os.remove(tmp_cache)
+                except OSError:
+                    pass
 
 
 def load_scenarios_from_cache(cache):

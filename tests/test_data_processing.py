@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock, PropertyMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import kovaaks_gui
+import kovaaks_web
 
 
 def _make_app_stub(scenario_info, user_by_lid, friends_by_lid,
@@ -29,9 +29,11 @@ def _make_app_stub(scenario_info, user_by_lid, friends_by_lid,
                        "always_show_total_points": True}
     app._global_points_sum = 0
     app._global_potential_points_sum = 0
+    app._global_projected_gain_sum = 0
     app._all_data = []
     app._sort_state = None
     app._filters = {}
+    app._hidden_scenarios = set()
 
     # Local stats cache support
     app._local_stats_cache = None
@@ -42,8 +44,14 @@ def _make_app_stub(scenario_info, user_by_lid, friends_by_lid,
     app.after = MagicMock()
 
     # Bind the real _rebuild_data to our stub
-    app._rebuild_data = kovaaks_gui.KovaaksApp._rebuild_data.__get__(app)
-    app._apply_current_sort = kovaaks_gui.KovaaksApp._apply_current_sort.__get__(app)
+    orig_rebuild = kovaaks_web.KovaaksAPI._rebuild_data.__get__(app)
+    def rebuild_data_wrapper(*args, **kwargs):
+        played, unplayed = orig_rebuild(*args, **kwargs)
+        app._all_data = played + unplayed
+        return len(played), len(unplayed)
+
+    app._rebuild_data = rebuild_data_wrapper
+    app._apply_current_sort = MagicMock()
     app._apply_filter = MagicMock()
 
     return app
@@ -63,7 +71,7 @@ class TestRebuildDataRows:
 
         app = _make_app_stub(info, user, friends)
 
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             played, unplayed = app._rebuild_data()
 
         # lid-4 is below threshold but still in scenario_info for this test
@@ -81,7 +89,7 @@ class TestRebuildDataRows:
         friends = {str(k): v for k, v in sample_friend_scores.items()}
 
         app = _make_app_stub(info, user, friends)
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             played, unplayed = app._rebuild_data()
 
         # lid-1: user + friends → played
@@ -97,7 +105,7 @@ class TestRebuildDataRows:
         user = {"lid-x": {"rank": 100, "score": 5000.0, "date": "2026-01-01"}}
 
         app = _make_app_stub(info, user, {})
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             app._rebuild_data()
 
         row = app._all_data[0]
@@ -110,7 +118,7 @@ class TestRebuildDataRows:
         friends = {"lid-x": [{"friend": "Rival", "rank": 100, "score": 3500.0, "date": "2026-01-01"}]}
 
         app = _make_app_stub(info, user, friends)
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             app._rebuild_data()
 
         row = app._all_data[0]
@@ -122,7 +130,7 @@ class TestRebuildDataRows:
         friends = {"lid-x": [{"friend": "A", "rank": 50, "score": 9000.0, "date": "2026-01-01"}]}
 
         app = _make_app_stub(info, {}, friends)
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             app._rebuild_data()
 
         row = app._all_data[0]
@@ -140,7 +148,7 @@ class TestRebuildDataRows:
         }
 
         app = _make_app_stub(info, user, {})
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             app._rebuild_data()
 
         # Points = (entries - rank) summed
@@ -152,7 +160,7 @@ class TestRebuildDataRows:
         user = {"lid-a": {"rank": 100, "score": 1000, "date": "2026-01-01"}}
 
         app = _make_app_stub(info, user, {})
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             app._rebuild_data()
 
         # Potential = (rank - 1)
@@ -164,7 +172,7 @@ class TestRebuildDataRows:
         friends = {"lid-f": [{"friend": "Buddy", "rank": 100, "score": 5000.0, "date": ""}]}
 
         app = _make_app_stub(info, {}, friends)
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             app._rebuild_data()
 
         # Friends-only potential = (entries - 1)
@@ -175,7 +183,7 @@ class TestRebuildDataRows:
         info = {"lid-u": {"name": "Unplayed", "entries": 8000}}
 
         app = _make_app_stub(info, {}, {})
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             app._rebuild_data()
 
         assert app._global_potential_points_sum == 7999
@@ -189,7 +197,7 @@ class TestRebuildDataRows:
         ]}
 
         app = _make_app_stub(info, {}, friends)
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             app._rebuild_data()
 
         row = app._all_data[0]
@@ -202,7 +210,7 @@ class TestRebuildDataRows:
         user = {"lid-p": {"rank": 500, "score": 3000.0, "date": "2026-01-01"}}
 
         app = _make_app_stub(info, user, {})
-        with patch("kovaaks_gui._get_local_stats", return_value={}):
+        with patch("kovaaks_web._get_local_stats", return_value={}):
             app._rebuild_data()
 
         row = app._all_data[0]
@@ -210,72 +218,34 @@ class TestRebuildDataRows:
         # Should be a numeric string
         int(row["Potential"])  # Should not raise
 
-    @patch('threading.Thread')
-    def test_rebuild_data_next_rank_updates(self, mock_thread):
-        class KovaaksAppStub:
+    @patch('kovaaks.api.get_next_leaderboard_position_points')
+    def test_get_next_rank_points(self, mock_get_points):
+        class KovaaksAPIStub:
             def __init__(self):
-                self._scenario_info = {}
-                self._user_by_lid = {}
-                self._friends_by_lid = {}
-                self._scores_cache = {"entry_history": {}}
-                self._cfg = {"stats_dir": "/nonexistent", "min_entries": "1", "always_show_total_points": True}
                 self._global_points_sum = 0
-                self._global_potential_points_sum = 0
-                self._global_projected_gain_sum = 0
-                self._all_data = []
-                self._sort_state = None
-                self._filters = {}
-                self._local_stats_cache = {}
-                self._local_stats_dirty = False
-                
-                self._next_global_points = None
-                self._fetching_next_rank = False
-                self._next_rank_var = MagicMock()
-                self._unplayed_needed_var = MagicMock()
-                self._aim_type_avgs = {}
-                self._hidden_scenarios = set()
-                
-            def _get_stats_dir(self):
-                return "/nonexistent"
-                
-            def after(self, delay, callback):
-                pass
-                
-            def _apply_current_sort(self):
-                pass
-                
-            def _apply_filter(self):
-                pass
-                
-            def _update_next_rank_display(self):
-                pass
-                
-            def _fetch_next_rank_points(self):
-                pass
+                self._cfg = {"username": ""}
+            
+            get_next_rank_points = kovaaks_web.KovaaksAPI.get_next_rank_points
 
-        # Case 1: _next_global_points is None -> should trigger thread fetch
-        app = KovaaksAppStub()
-        app._rebuild_data = kovaaks_gui.KovaaksApp._rebuild_data.__get__(app)
-        app._rebuild_data()
-        assert app._fetching_next_rank is True
-        mock_thread.assert_called_once()
-        mock_thread.reset_mock()
-
-        # Case 2: _next_global_points is set, points < _next_global_points -> should update locally, not start thread
-        app._next_global_points = 5000
-        app._scenario_info = {"lid1": {"name": "S1", "entries": 10000}}
-        app._user_by_lid = {"lid1": {"rank": 6000, "score": 100.0}} # 10000 - 6000 = 4000 points
-        app._fetching_next_rank = False
-        with patch.object(app, "_update_next_rank_display") as mock_local_upd:
-            app._rebuild_data()
-            mock_local_upd.assert_called_once()
-            mock_thread.assert_not_called()
-
-        # Case 3: _next_global_points is set, points >= _next_global_points (overtaken) -> should trigger thread fetch
-        app._next_global_points = 5000
-        app._scenario_info = {"lid1": {"name": "S1", "entries": 10000}}
-        app._user_by_lid = {"lid1": {"rank": 4000, "score": 200.0}} # 10000 - 4000 = 6000 points
-        app._fetching_next_rank = False
-        app._rebuild_data()
-        assert app._fetching_next_rank is True
-        mock_thread.assert_called_once()
+        app = KovaaksAPIStub()
+        
+        # 1. Zero points
+        assert app.get_next_rank_points() == "N/A"
+        
+        # 2. No username
+        app._global_points_sum = 5000
+        assert app.get_next_rank_points() == "N/A (No Username)"
+        
+        # 3. Successful fetch with next points > current points
+        app._cfg["username"] = "player1"
+        mock_get_points.return_value = 5500
+        assert app.get_next_rank_points() == "+500"
+        mock_get_points.assert_called_with("player1", 5000)
+        
+        # 4. Rank 1 (next points <= current points)
+        mock_get_points.return_value = 4500
+        assert app.get_next_rank_points() == "Rank 1!"
+        
+        # 5. Exception handled
+        mock_get_points.side_effect = Exception("API error")
+        assert app.get_next_rank_points() == "Error"
