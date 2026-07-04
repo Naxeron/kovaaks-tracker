@@ -47,6 +47,7 @@ def get_local_stats(stats_dir, cache_dict=None):
         # Parse new files and update cached stats
         if new_files:
             cache_dict["_dirty"] = True
+            newly_played = cache_dict.setdefault("newly_played_scenarios", [])
             # Sort chronologically (oldest to newest) to process runs in order
             sorted_new_files = []
             for fname in new_files:
@@ -57,6 +58,8 @@ def get_local_stats(stats_dir, cache_dict=None):
                 try:
                     dt = datetime.datetime.strptime(date_str, "%Y.%m.%d-%H.%M.%S")
                     sorted_new_files.append((dt, fname, sname))
+                    if sname not in newly_played:
+                        newly_played.append(sname)
                 except ValueError:
                     continue
 

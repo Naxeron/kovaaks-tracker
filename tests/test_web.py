@@ -299,3 +299,45 @@ def test_autoplay_notification_fires_before_table_refresh(
         f"onLocalScoreDetected (call #{autoplay_idx}) must fire before "
         f"fetchData (call #{fetch_idx}) for minimum autoplay latency"
     )
+
+
+@patch("kovaaks.cache.save_scores_cache")
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("time.sleep")
+@patch("kovaaks.api.kovaaks_login")
+@patch("kovaaks.api.kovaaks_get_friends_scores")
+@patch("kovaaks.data_processing.parse_leaderboard_entries")
+def test_handle_new_stats_files_retries_when_user_entry_none(
+    mock_parse, mock_get_scores, mock_login, mock_sleep,
+    mock_polling, mock_load_cache, mock_load_config, mock_save_cache
+):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000, "password": "password123"}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+    mock_login.return_value = "fake_jwt"
+    mock_get_scores.return_value = {"fake_data": True}
+    
+    # First attempt: parse returns user_entry = None (simulating API lag)
+    # Second attempt: parse returns valid user_entry
+    mock_parse.side_effect = [
+        (None, []),
+        ({"score": "123.4"}, []),
+    ]
+
+    api = KovaaksAPI()
+    mock_window = MagicMock()
+    api.set_window(mock_window)
+    
+    api._scenario_info = {"lid-1": {"name": "1w6ts Reload", "entries": 1000}}
+
+    from unittest.mock import mock_open
+    with patch("builtins.open", mock_open(read_data="Score:,123.4\n")):
+        api._handle_new_stats_files("/fake/stats", ["1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv"])
+        
+        # Verify it logged in
+        mock_login.assert_called_once_with("testuser", "password123")
+        # Verify kovaaks_get_friends_scores was called twice (initial + 1 retry)
+        assert mock_get_scores.call_count == 2
+        # Verify cache saved successfully
+        mock_save_cache.assert_called_once()

@@ -106,7 +106,22 @@ def run_fetch_all(app, username, password):
             return
 
         all_lids = list(scenario_info.keys())
-        work_items = [lid for lid in all_lids if lid not in scores_data]
+        name_to_lid = {info["name"]: lid for lid, info in scenario_info.items()}
+        newly_played_names = scores_cache.pop("newly_played_scenarios", [])
+        newly_played_lids = {name_to_lid[name] for name in newly_played_names if name in name_to_lid}
+        
+        local_stats_cache = scores_cache.get("local_stats", {})
+        
+        work_items = []
+        for lid in all_lids:
+            sname = scenario_info[lid]["name"]
+            is_newly_played = lid in newly_played_lids
+            has_local_runs = sname in local_stats_cache and local_stats_cache[sname].get("count", 0) > 0
+            has_cached_user_score = lid in scores_data and "user" in scores_data[lid]
+            
+            if (lid not in scores_data) or is_newly_played or (has_local_runs and not has_cached_user_score):
+                work_items.append(lid)
+
         total_to_fetch = len(work_items)
         cached_count = len(all_lids) - total_to_fetch
 
@@ -126,11 +141,8 @@ def run_fetch_all(app, username, password):
         eta_window = []
 
         def _save_cache():
-            save_scores_cache({
-                "scenarios": scores_cache.get("scenarios", []),
-                "scores": scores_data,
-                "entry_history": scores_cache.get("entry_history", {}),
-            })
+            scores_cache["scores"] = scores_data
+            save_scores_cache(scores_cache)
 
         def _fetch_one(lid, session):
             nonlocal errors, completed, session_expired

@@ -136,3 +136,20 @@ class TestGetLocalStats:
         res = _get_local_stats(str(stats_dir))
         assert res["1w6ts Reload"]["count"] == 2
         assert res["1w6ts Reload"]["runs_today"] == 1
+
+    def test_newly_played_scenarios_tracked_in_cache(self, tmp_path):
+        """Test that get_local_stats records newly played scenarios in newly_played_scenarios."""
+        stats_dir = tmp_path / "stats"
+        stats_dir.mkdir()
+        
+        f1 = stats_dir / "1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv"
+        f1.write_text("Score:,100.5\n", encoding="utf-8")
+        
+        cache = {
+            "known_stat_files": [],
+            "local_stats": {}
+        }
+        
+        _get_local_stats(str(stats_dir), cache)
+        assert "newly_played_scenarios" in cache
+        assert "1w6ts Reload" in cache["newly_played_scenarios"]
