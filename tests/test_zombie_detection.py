@@ -117,3 +117,48 @@ def test_is_scenario_zombie_steam_workshop_search_error(mock_get, mock_exists):
 
     res = is_scenario_zombie("Pasu Voltaic Easy", "/dummy/stats/", set())
     assert res is False
+
+
+@patch("os.path.exists")
+@patch("requests.get")
+def test_is_scenario_zombie_steam_workshop_search_no_items_found(mock_get, mock_exists):
+    # Simulate not local, query Steam Workshop, returns "No items matching..."
+    mock_exists.return_value = False
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = 'Some HTML... No items matching your search criteria were found ...'
+    mock_get.return_value = mock_resp
+
+    res = is_scenario_zombie("Pasu Voltaic Easy", "/dummy/stats/", set())
+    assert res is True
+
+
+@patch("os.path.exists")
+@patch("requests.get")
+def test_is_scenario_zombie_steam_workshop_paging_info_found(mock_get, mock_exists):
+    # Simulate not local, query Steam Workshop, found in paging info
+    mock_exists.return_value = False
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = 'HTML... \\\\\\\"title\\\\\\\":\\\\\\\"Pasu Voltaic Easy\\\\\\\" ... <div class="workshopBrowsePagingInfo">Showing 1-1 of 1 entries</div>'
+    mock_get.return_value = mock_resp
+
+    res = is_scenario_zombie("Pasu Voltaic Easy", "/dummy/stats/", set())
+    assert res is False
+
+
+@patch("os.path.exists")
+@patch("requests.get")
+def test_is_scenario_zombie_steam_workshop_paging_info_zombie(mock_get, mock_exists):
+    # Simulate not local, query Steam Workshop, paging info found but title does not match
+    mock_exists.return_value = False
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = 'HTML... \\\\\\\"title\\\\\\\":\\\\\\\"Some Other Scenario\\\\\\\" ... <div class="workshopBrowsePagingInfo">Showing 1-1 of 1 entries</div>'
+    mock_get.return_value = mock_resp
+
+    res = is_scenario_zombie("Pasu Voltaic Easy", "/dummy/stats/", set())
+    assert res is True
