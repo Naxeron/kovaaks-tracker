@@ -353,11 +353,33 @@ def is_scenario_zombie(name, stats_dir, cached_zombies=None):
                 return False
 
         # Extract total_count of search results from the HTML.
-        # If total_count is larger than the number of titles checked on this page,
-        # we cannot check all results and should avoid false positives.
-        total_count_match = re.search(r'total_count\\*"\s*:\s*([0-9]+)', html)
-        if total_count_match:
-            total_count = int(total_count_match.group(1))
+        total_count = None
+
+        # 1. Check for 'No items matching...'
+        if "No items matching your search criteria were found" in html:
+            total_count = 0
+
+        # 2. Check class="workshopBrowsePagingInfo"
+        if total_count is None:
+            paging_info_match = re.search(
+                r'class=["\']?workshopBrowsePagingInfo["\']?\s*>\s*(?:[^<]*?of\s+)?([0-9,]+)\s+entries',
+                html, re.IGNORECASE | re.DOTALL
+            )
+            if paging_info_match:
+                try:
+                    total_count = int(paging_info_match.group(1).replace(",", ""))
+                except ValueError:
+                    pass
+
+        # 3. Check JSON total_count fallback
+        if total_count is None:
+            total_count_match = re.search(r'total_count\\*"\s*:\s*([0-9]+)', html)
+            if total_count_match:
+                total_count = int(total_count_match.group(1))
+
+        if total_count is not None:
+            # If total_count is larger than the number of titles checked on this page,
+            # we cannot check all results and should avoid false positives.
             if total_count > len(raw_titles):
                 return False
         else:
