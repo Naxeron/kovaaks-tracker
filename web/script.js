@@ -10,6 +10,17 @@ let isResizing = false;
 let autoplayActive = false;
 let autoplayCurrentScenario = null;
 let initialFetchTriggered = false;
+let currentAutoHiddenColumns = [];
+
+function getColumnsToRender() {
+    if (!currentData || !currentData.columns) return [];
+    return currentData.columns.filter(c => {
+        if (c === 'Scenario') return true;
+        if (currentAutoHiddenColumns.includes(c)) return false;
+        if (visibleColumns && !visibleColumns.includes(c)) return false;
+        return true;
+    });
+}
 
 function applyColumnWidths() {
     let styleTag = document.getElementById('dynamic-column-styles');
@@ -26,7 +37,7 @@ function applyColumnWidths() {
         return;
     }
     
-    const columnsToRender = visibleColumns ? currentData.columns.filter(c => c === 'Scenario' || visibleColumns.includes(c)) : currentData.columns;
+    const columnsToRender = getColumnsToRender();
     
     let css = '';
     columnsToRender.forEach((col, index) => {
@@ -207,11 +218,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 const item = document.createElement('div');
                 item.className = 'menu-item';
                 
-                const isVisible = !visibleColumns || visibleColumns.includes(col) || col === 'Scenario';
-                const icon = isVisible ? '✓ ' : '&nbsp;&nbsp;&nbsp;';
-                item.innerHTML = `<span style="display:inline-block; width:15px;">${icon}</span> ${col}`;
+                const isAutoHidden = currentAutoHiddenColumns.includes(col);
+                const isVisible = !isAutoHidden && (!visibleColumns || visibleColumns.includes(col) || col === 'Scenario');
                 
-                if (col === 'Scenario') {
+                let icon;
+                if (isAutoHidden) {
+                    icon = '&nbsp;&nbsp;&nbsp;';
+                } else {
+                    icon = isVisible ? '✓ ' : '&nbsp;&nbsp;&nbsp;';
+                }
+                
+                let label = col;
+                if (isAutoHidden) {
+                    label += ' (filtered)';
+                }
+                item.innerHTML = `<span style="display:inline-block; width:15px;">${icon}</span> ${label}`;
+                
+                if (col === 'Scenario' || isAutoHidden) {
                     item.style.color = '#888';
                     item.style.cursor = 'not-allowed';
                 } else {
@@ -576,7 +599,87 @@ function renderTable() {
         }
     }
 
-    const columnsToRender = visibleColumns ? currentData.columns.filter(c => c === 'Scenario' || visibleColumns.includes(c)) : currentData.columns;
+    // 1. Filter and sort rows first
+    filteredRows = [...currentData.rows];
+    
+    const searchTerm = document.getElementById('search-input').value.toLowerCase();
+
+    const colIndex = {};
+    currentData.columns.forEach((c, i) => colIndex[c] = i);
+
+    filteredRows = filteredRows.filter(row => {
+        if (searchTerm) {
+            const matchesSearch = row.some(cell => String(cell).toLowerCase().includes(searchTerm));
+            if (!matchesSearch) return false;
+        }
+        
+        const myRank = row[colIndex["My Rank"]];
+        const topFriend = row[colIndex["Top Friend"]];
+        
+        const isPlayedByMe = myRank !== "";
+        const isPlayedByFriend = topFriend !== "";
+        const rankDiff = parseInt(row[colIndex["Rank Diff"]]);
+
+        const isLosing = isPlayedByMe && isPlayedByFriend && !isNaN(rankDiff) && rankDiff > 0;
+        const isFriendsOnly = isPlayedByFriend && !isPlayedByMe;
+        const isMeOnly = isPlayedByMe && !isPlayedByFriend;
+        const isUnplayed = !isPlayedByMe && !isPlayedByFriend;
+
+        const anyFilterActive = filters.losing || filters.friends || filters.me || filters.unplayed;
+        if (anyFilterActive) {
+            let pass = false;
+            if (filters.losing && isLosing) pass = true;
+            if (filters.friends && isFriendsOnly) pass = true;
+            if (filters.me && isMeOnly) pass = true;
+            if (filters.unplayed && isUnplayed) pass = true;
+            if (!pass) return false;
+        }
+
+        return true;
+    });
+
+    if (sortCol !== -1) {
+        filteredRows.sort((a, b) => {
+            let valA = a[sortCol];
+            let valB = b[sortCol];
+            
+            if (typeof valA === 'string' && typeof valB === 'string') {
+                const numA = parseFloat(valA.replace(/,/g, '').replace(/%/g, '').replace(/\+/g, ''));
+                const numB = parseFloat(valB.replace(/,/g, '').replace(/%/g, '').replace(/\+/g, ''));
+                if (!isNaN(numA) && !isNaN(numB)) {
+                    valA = numA;
+                    valB = numB;
+                }
+            }
+
+            if (valA < valB) return sortAsc ? -1 : 1;
+            if (valA > valB) return sortAsc ? 1 : -1;
+            return 0;
+        });
+    }
+
+    // 2. Compute currentAutoHiddenColumns
+    currentAutoHiddenColumns = [];
+    if (filteredRows.length > 0) {
+        currentData.columns.forEach(col => {
+            if (col === 'Scenario') return;
+            const idx = colIndex[col];
+            let isEmpty = true;
+            for (let i = 0; i < filteredRows.length; i++) {
+                const val = filteredRows[i][idx];
+                if (val !== undefined && val !== null && String(val).trim() !== "") {
+                    isEmpty = false;
+                    break;
+                }
+            }
+            if (isEmpty) {
+                currentAutoHiddenColumns.push(col);
+            }
+        });
+    }
+
+    // 3. Render headers based on getColumnsToRender()
+    const columnsToRender = getColumnsToRender();
 
     columnsToRender.forEach((col) => {
         const originalIndex = currentData.columns.indexOf(col);
@@ -654,64 +757,7 @@ function renderTable() {
 
     applyColumnWidths();
 
-    filteredRows = [...currentData.rows];
-    
-    const searchTerm = document.getElementById('search-input').value.toLowerCase();
-
-    const colIndex = {};
-    currentData.columns.forEach((c, i) => colIndex[c] = i);
-
-    filteredRows = filteredRows.filter(row => {
-        if (searchTerm) {
-            const matchesSearch = row.some(cell => String(cell).toLowerCase().includes(searchTerm));
-            if (!matchesSearch) return false;
-        }
-        
-        const myRank = row[colIndex["My Rank"]];
-        const topFriend = row[colIndex["Top Friend"]];
-        
-        const isPlayedByMe = myRank !== "";
-        const isPlayedByFriend = topFriend !== "";
-        const rankDiff = parseInt(row[colIndex["Rank Diff"]]);
-
-        const isLosing = isPlayedByMe && isPlayedByFriend && !isNaN(rankDiff) && rankDiff > 0;
-        const isFriendsOnly = isPlayedByFriend && !isPlayedByMe;
-        const isMeOnly = isPlayedByMe && !isPlayedByFriend;
-        const isUnplayed = !isPlayedByMe && !isPlayedByFriend;
-
-        const anyFilterActive = filters.losing || filters.friends || filters.me || filters.unplayed;
-        if (anyFilterActive) {
-            let pass = false;
-            if (filters.losing && isLosing) pass = true;
-            if (filters.friends && isFriendsOnly) pass = true;
-            if (filters.me && isMeOnly) pass = true;
-            if (filters.unplayed && isUnplayed) pass = true;
-            if (!pass) return false;
-        }
-
-        return true;
-    });
-
-    if (sortCol !== -1) {
-        filteredRows.sort((a, b) => {
-            let valA = a[sortCol];
-            let valB = b[sortCol];
-            
-            if (typeof valA === 'string' && typeof valB === 'string') {
-                const numA = parseFloat(valA.replace(/,/g, '').replace(/%/g, '').replace(/\+/g, ''));
-                const numB = parseFloat(valB.replace(/,/g, '').replace(/%/g, '').replace(/\+/g, ''));
-                if (!isNaN(numA) && !isNaN(numB)) {
-                    valA = numA;
-                    valB = numB;
-                }
-            }
-
-            if (valA < valB) return sortAsc ? -1 : 1;
-            if (valA > valB) return sortAsc ? 1 : -1;
-            return 0;
-        });
-    }
-
+    // 4. Update stats and trigger batch rendering
     const alwaysShow = window.currentConfig ? window.currentConfig.always_show_total_points : true;
     if (currentData.global_stats) {
         if (alwaysShow !== false) {
@@ -754,7 +800,7 @@ function renderNextBatch() {
     
     const fragment = document.createDocumentFragment();
     
-    const columnsToRender = visibleColumns ? currentData.columns.filter(c => c === 'Scenario' || visibleColumns.includes(c)) : currentData.columns;
+    const columnsToRender = getColumnsToRender();
     
     for (let i = renderedRowsCount; i < endIndex; i++) {
         const row = filteredRows[i];
