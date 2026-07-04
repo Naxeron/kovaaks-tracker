@@ -77,15 +77,35 @@ def test_is_scenario_zombie_steam_workshop_search_found(mock_get, mock_exists):
 @patch("requests.get")
 def test_is_scenario_zombie_steam_workshop_search_zombie(mock_get, mock_exists):
     # Simulate not local, query Steam Workshop, NOT found (zombie)
+    # mock_resp has total_count: 1, and 1 title ("Some Other Scenario").
+    # Since total_count is small, it confirms it's a zombie.
     mock_exists.return_value = False
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.text = 'dummy text \\\\\\\"title\\\\\\\":\\\\\\\"Some Other Scenario\\\\\\\" dummy'
+    mock_resp.text = 'dummy text \\\\\\\"title\\\\\\\":\\\\\\\"Some Other Scenario\\\\\\\" \\\\\\\"total_count\\\\\\\":1'
     mock_get.return_value = mock_resp
 
     res = is_scenario_zombie("Pasu Voltaic Easy", "/dummy/stats/", set())
     assert res is True
+
+
+@patch("os.path.exists")
+@patch("requests.get")
+def test_is_scenario_zombie_steam_workshop_search_common_name_not_zombie(mock_get, mock_exists):
+    # Simulate not local, query Steam Workshop. The target scenario is not on the first page,
+    # but total_count is large (e.g., 100), meaning there are more results.
+    # It should NOT be flagged as a zombie (returns False).
+    mock_exists.return_value = False
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = 'dummy text \\\\\\\"title\\\\\\\":\\\\\\\"Some Other Scenario\\\\\\\" \\\\\\\"total_count\\\\\\\":100'
+    mock_get.value = mock_resp
+    mock_get.return_value = mock_resp
+
+    res = is_scenario_zombie("Pasu Voltaic Easy", "/dummy/stats/", set())
+    assert res is False
 
 
 @patch("os.path.exists")

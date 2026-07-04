@@ -352,6 +352,19 @@ def is_scenario_zombie(name, stats_dir, cached_zombies=None):
             if normalize(clean_title) == normalized_name:
                 return False
 
+        # Extract total_count of search results from the HTML.
+        # If total_count is larger than the number of titles checked on this page,
+        # we cannot check all results and should avoid false positives.
+        total_count_match = re.search(r'total_count\\*"\s*:\s*([0-9]+)', html)
+        if total_count_match:
+            total_count = int(total_count_match.group(1))
+            if total_count > len(raw_titles):
+                return False
+        else:
+            # If total_count is not found in the HTML, default to False (not a zombie)
+            # to be conservative and prevent false positives if page format changes.
+            return False
+
         # No matching titles found on Workshop
         return True
     except Exception as e:
