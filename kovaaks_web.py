@@ -913,17 +913,20 @@ class KovaaksAPI:
                     user_entry, friend_entries = parse_leaderboard_entries(data, username)
                     
                     target_met = True
-                    if user_entry and expected_score > -999999.0:
-                        try:
-                            clean_score = str(user_entry["score"]).replace(",", "")
-                            if clean_score.endswith("%"):
-                                clean_score = clean_score[:-1]
-                            api_score = float(clean_score)
-                            
-                            if api_score < expected_score - 0.001:
-                                target_met = False
-                        except (ValueError, TypeError):
-                            pass
+                    if expected_score > -999999.0:
+                        if not user_entry:
+                            target_met = False
+                        else:
+                            try:
+                                clean_score = str(user_entry["score"]).replace(",", "")
+                                if clean_score.endswith("%"):
+                                    clean_score = clean_score[:-1]
+                                api_score = float(clean_score)
+                                
+                                if api_score < expected_score - 0.001:
+                                    target_met = False
+                            except (ValueError, TypeError):
+                                pass
                             
                     if target_met or attempt == max_attempts - 1:
                         if user_entry:
