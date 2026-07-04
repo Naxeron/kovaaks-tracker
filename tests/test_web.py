@@ -259,8 +259,35 @@ def test_web_ui_optimizations():
     assert "sys.argv" in content_py
 
 
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("time.sleep")
+def test_autoplay_notification_fires_before_table_refresh(
+    mock_sleep, mock_polling, mock_load_cache, mock_load_config
+):
+    """onLocalScoreDetected must fire before fetchData to minimize autoplay latency."""
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
 
-    
+    api = KovaaksAPI()
+    mock_window = MagicMock()
+    api.set_window(mock_window)
 
+    api._handle_new_stats_files("/fake/stats", ["1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv"])
 
+    calls = [str(c) for c in mock_window.evaluate_js.call_args_list]
+    autoplay_idx = None
+    fetch_idx = None
+    for i, c in enumerate(calls):
+        if "onLocalScoreDetected" in c and autoplay_idx is None:
+            autoplay_idx = i
+        if "fetchData" in c and fetch_idx is None:
+            fetch_idx = i
 
+    assert autoplay_idx is not None, "onLocalScoreDetected was not called"
+    assert fetch_idx is not None, "fetchData was not called"
+    assert autoplay_idx < fetch_idx, (
+        f"onLocalScoreDetected (call #{autoplay_idx}) must fire before "
+        f"fetchData (call #{fetch_idx}) for minimum autoplay latency"
+    )

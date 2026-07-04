@@ -617,37 +617,40 @@ class KovaaksAPI:
 
         stats_dir = self._get_stats_dir()
 
-        def check_and_launch():
-            self._update_status(f"Checking scenario availability: {name}...")
+        import re
+        norm_name = re.sub(r'[^a-z0-9]', '', name.lower())
+
+        if norm_name in self._zombies:
+            self._update_status(f"Error: '{name}' has been deleted from Steam Workshop.")
+            logger.warning("Scenario '%s' is a zombie scenario (deleted from Steam Workshop).", name)
+            return True
+
+        # Optimistically launch the scenario immediately
+        try:
+            uri = STEAM_LAUNCH_URI.format(urllib.parse.quote(name, safe=""))
+            self._update_status(f"Launching: {name}")
+            webbrowser.open(uri)
+        except Exception as e:
+            logger.exception("Error launching scenario: %s", name)
+            self._update_status(f"Error launching: {name}")
+            return True
+
+        # Check in the background if it's a zombie to update our cache
+        def check_zombie_bg():
             try:
                 is_zombie = is_scenario_zombie(name, stats_dir, self._zombies)
+                if is_zombie:
+                    if norm_name not in self._zombies:
+                        self._zombies.add(norm_name)
+                        self._scores_cache["zombies"] = list(self._zombies)
+                        save_scores_cache(self._scores_cache)
+                    self._update_status(f"Error: '{name}' has been deleted from Steam Workshop.")
+                    if self.window:
+                        self.window.evaluate_js("if(window.fetchData) window.fetchData()")
             except Exception as e:
                 logger.error("Error in background zombie check for '%s': %s", name, e)
-                is_zombie = False
 
-            if is_zombie:
-                import re
-                norm_name = re.sub(r'[^a-z0-9]', '', name.lower())
-                if norm_name not in self._zombies:
-                    self._zombies.add(norm_name)
-                    self._scores_cache["zombies"] = list(self._zombies)
-                    save_scores_cache(self._scores_cache)
-
-                self._update_status(f"Error: '{name}' has been deleted from Steam Workshop.")
-                logger.warning("Scenario '%s' is a zombie scenario (deleted from Steam Workshop).", name)
-
-                if self.window:
-                    self.window.evaluate_js("if(window.fetchData) window.fetchData()")
-            else:
-                try:
-                    uri = STEAM_LAUNCH_URI.format(urllib.parse.quote(name, safe=""))
-                    self._update_status(f"Launching: {name}")
-                    webbrowser.open(uri)
-                except Exception as e:
-                    logger.exception("Error launching scenario: %s", name)
-                    self._update_status(f"Error launching: {name}")
-
-        threading.Thread(target=check_and_launch, daemon=True).start()
+        threading.Thread(target=check_zombie_bg, daemon=True).start()
         return True
 
     def update_status(self, msg):
@@ -679,15 +682,77 @@ class KovaaksAPI:
             except OSError:
                 pass
         
+        self._start_file_watcher()
+
+    def _start_file_watcher(self):
+        """Start a watchdog-based file watcher for near-instant detection (~10ms).
+        Falls back to mtime-based polling (250ms) if watchdog is unavailable."""
+        stats_dir = self._get_stats_dir()
+        try:
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler
+
+            api_ref = self
+
+            class StatsFileHandler(FileSystemEventHandler):
+                def on_created(self, event):
+                    if event.is_directory:
+                        return
+                    fname = os.path.basename(event.src_path)
+                    if not fname.endswith(" Stats.csv"):
+                        return
+                    if fname in api_ref._known_stat_files:
+                        return
+                    api_ref._known_stat_files.add(fname)
+                    api_ref._scores_cache["known_stat_files"] = list(api_ref._known_stat_files)
+                    from kovaaks.cache import save_scores_cache
+                    save_scores_cache(api_ref._scores_cache)
+
+                    api_ref._local_stats_dirty = True
+                    threading.Thread(
+                        target=api_ref._handle_new_stats_files,
+                        args=(stats_dir, {fname}),
+                        daemon=True
+                    ).start()
+
+            if stats_dir and os.path.exists(stats_dir):
+                observer = Observer()
+                observer.schedule(StatsFileHandler(), stats_dir, recursive=False)
+                observer.daemon = True
+                observer.start()
+                logger.info("Stats watcher: using watchdog/inotify for instant detection")
+                return
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug("Watchdog observer failed, falling back to polling: %s", e)
+
+        # Fallback: mtime-based polling loop
+        logger.info("Stats watcher: using mtime polling (250ms interval)")
         threading.Thread(target=self._poll_stats_loop, daemon=True).start()
 
     def _poll_stats_loop(self):
+        """Fallback polling loop using directory mtime for change detection."""
+        last_mtime = 0
+        stats_dir = self._get_stats_dir()
+        if stats_dir and os.path.exists(stats_dir):
+            try:
+                last_mtime = os.stat(stats_dir).st_mtime
+            except OSError:
+                pass
+
         while True:
-            time.sleep(5)
+            time.sleep(0.25)
             stats_dir = self._get_stats_dir()
             if not stats_dir or not os.path.exists(stats_dir):
                 continue
             try:
+                # Fast check using directory modification time
+                mtime = os.stat(stats_dir).st_mtime
+                if mtime == last_mtime:
+                    continue
+                last_mtime = mtime
+
                 current_files = set(f for f in os.listdir(stats_dir) if f.endswith(" Stats.csv"))
                 new_files = current_files - self._known_stat_files
                 if new_files:
@@ -697,57 +762,80 @@ class KovaaksAPI:
                     save_scores_cache(self._scores_cache)
                     
                     self._local_stats_dirty = True
-                    self._handle_new_stats_files(stats_dir, new_files)
+                    threading.Thread(
+                        target=self._handle_new_stats_files,
+                        args=(stats_dir, new_files),
+                        daemon=True
+                    ).start()
             except OSError:
                 pass
 
     def _handle_new_stats_files(self, stats_dir, new_files):
+        # Extract scenario names from filenames immediately (no file I/O needed)
         snames = set()
-        lids_to_update = {}  # lid -> expected_new_score
-        
         for fname in new_files:
             base = fname[:-10]
             parts = base.rsplit(" - ", 2)
             if len(parts) >= 3:
-                sname = parts[0]
-                snames.add(sname)
-                
-                # Try to parse the score from this new run
-                fpath = os.path.join(stats_dir, fname)
-                score_val = None
-                try:
-                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-                        for line in f:
-                            if line.startswith("Score:,"):
-                                score_val = float(line.split(",")[1])
-                                break
-                except Exception:
-                    pass
-                    
-                for lid, info in self._scenario_info.items():
-                    if info["name"] == sname:
-                        if score_val is not None:
-                            lids_to_update[lid] = max(lids_to_update.get(lid, -999999.0), score_val)
-                        elif lid not in lids_to_update:
-                            lids_to_update[lid] = -999999.0
-                        break
+                snames.add(parts[0])
 
-        # Notify JS to reload the table data (to show the new local runs count)
-        if self.window:
-            self.window.evaluate_js("if(window.fetchData) window.fetchData()")
-
-        # Notify JS of the new local runs
+        # Notify autoplay FIRST — this is the latency-critical path.
+        # onLocalScoreDetected triggers autoplayAdvance() which launches the next
+        # scenario. This must happen before the heavy fetchData() table rebuild.
         for sname in snames:
             if self.window:
                 import json
                 safe_sname = json.dumps(sname)
                 self.window.evaluate_js(f"if (window.onLocalScoreDetected) window.onLocalScoreDetected({safe_sname})")
 
+        # Notify JS to reload the table data (to show the updated local runs count).
+        # This triggers a full table rebuild, so it comes after autoplay notification.
+        if self.window:
+            self.window.evaluate_js("if(window.fetchData) window.fetchData()")
+
+        # Now parse score values from the files (can afford to wait/retry here)
+        lids_to_update = {}  # lid -> expected_new_score
+
+        # Build reverse index once for fast name→lid lookup
+        name_to_lid = {}
+        for lid, info in self._scenario_info.items():
+            name_to_lid[info["name"]] = lid
+
+        for fname in new_files:
+            base = fname[:-10]
+            parts = base.rsplit(" - ", 2)
+            if len(parts) >= 3:
+                sname = parts[0]
+                lid = name_to_lid.get(sname)
+                if lid is None:
+                    continue
+
+                fpath = os.path.join(stats_dir, fname)
+                score_val = None
+                for attempt in range(3):
+                    try:
+                        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                            for line in f:
+                                if line.startswith("Score:,"):
+                                    score_val = float(line.split(",")[1])
+                                    break
+                        if score_val is not None:
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(0.1)
+
+                if score_val is not None:
+                    lids_to_update[lid] = max(lids_to_update.get(lid, -999999.0), score_val)
+                elif lid not in lids_to_update:
+                    lids_to_update[lid] = -999999.0
+
         if not lids_to_update:
             return
 
-        # Give client a few seconds to upload the stats first
-        time.sleep(3)
+        # Brief pause to let the KovaaKs client upload the stats to the server.
+        # The client typically uploads within ~1s of writing the stats file.
+        time.sleep(1)
 
         username = self._cfg.get("username", "").strip()
         password = self._cfg.get("password", "")
@@ -774,7 +862,9 @@ class KovaaksAPI:
             max_attempts = 5
             for attempt in range(max_attempts):
                 try:
-                    data = kovaaks_get_friends_scores(self._jwt_token, lid, session=session)
+                    data = kovaaks_get_friends_scores(
+                        self._jwt_token, lid, session=session,
+                        timeout=10, max_retries=2)
                     
                     user_entry, friend_entries = parse_leaderboard_entries(data, username)
                     
@@ -809,8 +899,10 @@ class KovaaksAPI:
                             
                         break
                     else:
-                        logger.debug("Score for lid=%s not updated yet in API, retrying (%d/%d)...", lid, attempt+1, max_attempts)
-                        time.sleep(4)
+                        # Exponential backoff: 1s, 2s, 3s, 4s
+                        retry_wait = min(4, attempt + 1)
+                        logger.debug("Score for lid=%s not updated yet in API, retrying (%d/%d) in %ds...", lid, attempt+1, max_attempts, retry_wait)
+                        time.sleep(retry_wait)
                 except Exception as e:
                     if isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 401:
                         logger.warning("Session expired during auto-update. Attempting re-login.")
@@ -823,8 +915,9 @@ class KovaaksAPI:
                             except Exception as le:
                                 logger.debug("Re-login failed during auto-update: %s", le)
                     
+                    retry_wait = min(4, attempt + 1)
                     logger.debug("Failed auto-update for lid=%s on attempt %d/%d: %s", lid, attempt+1, max_attempts, e)
-                    time.sleep(4)
+                    time.sleep(retry_wait)
                 
         if updated:
             save_scores_cache(self._scores_cache)
