@@ -17,9 +17,21 @@ A vibe-coded tracker for KovaaKs. Built for rank farming, sniping friends, and o
    ```bash
    git clone https://github.com/naxeron/kovaaks-tracker.git
    cd kovaaks-tracker
-   pip install requests
+   pip install -r requirements.txt
    ```
-2. **Run**: `python kovaaks_gui.py`
+   *Note for Linux users (especially Arch Linux) running the Web UI*:
+   `pywebview` requires system-level GUI/WebKit backends. For the forced GTK backend on Arch Linux, run:
+   ```bash
+   sudo pacman -S python-gobject webkit2gtk-4.1
+   ```
+   For Debian/Ubuntu-based systems, run:
+   ```bash
+   sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-webkit2-4.1
+   ```
+
+2. **Run**:
+   - **Desktop GUI**: `python kovaaks_gui.py`
+   - **Web UI**: `python kovaaks_web.py`
 3. **Login**: Enter your KovaaKs credentials.
 
 ## Controls

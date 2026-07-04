@@ -11,6 +11,20 @@ def _bind_entry_ctrl_a(entry):
     entry.bind("<Control-a>", lambda e: (e.widget.select_range(0, tk.END), e.widget.icursor(tk.END), "break")[-1])
     entry.bind("<Control-A>", lambda e: (e.widget.select_range(0, tk.END), e.widget.icursor(tk.END), "break")[-1])
 
+    def show_context_menu(event):
+        menu = tk.Menu(entry, tearoff=0, bg=BG_LIGHTER, fg=TEXT, activebackground=ACCENT, activeforeground="#fff")
+        menu.add_command(label="Cut", command=lambda: entry.event_generate("<<Cut>>"))
+        menu.add_command(label="Copy", command=lambda: entry.event_generate("<<Copy>>"))
+        menu.add_command(label="Paste", command=lambda: entry.event_generate("<<Paste>>"))
+        menu.add_separator()
+        menu.add_command(label="Select All", command=lambda: (entry.select_range(0, tk.END), entry.icursor(tk.END)))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    entry.bind("<Button-3>", show_context_menu)
+
 
 class ToolTip:
     def __init__(self, widget, text_func):

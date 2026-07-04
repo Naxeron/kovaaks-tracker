@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KovaaK's Scenario Tracker</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <div class="header-left">
+                <div class="logo">⌖</div>
+                <h1>KovaaKs Scenario Tracker</h1>
+            </div>
+            <div class="header-right">
+                <button id="btn-autoplay" class="action-btn autoplay-btn">
+                    <span class="icon">▶</span> Autoplay
+                </button>
+                <button id="btn-fetch" class="action-btn fetch-btn">
+                    <span class="icon">↻</span> Refresh
+                </button>
+                <button id="btn-settings" class="action-btn settings-btn">
+                    <span class="icon">⚙</span>
+                </button>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="top-bar">
+                <div class="search-container">
+                    <label for="search-input"><span class="icon">🔍</span> Filter:</label>
+                    <input type="text" id="search-input">
+                </div>
+                <div class="stats-container">
+                    <span>Next Rank: <span id="stat-next-rank">+0</span></span>
+                    <span>Points: <span id="stat-points">0</span></span>
+                    <span>Potential Points: <span id="stat-potential">0</span></span>
+                    <span id="stat-rows">0 rows</span>
+                </div>
+            </div>
+
+            <div class="filter-bar">
+                <div class="filter-toggles">
+                    <button class="toggle-btn" data-filter="losing" id="toggle-losing">
+                        <span class="icon">👎</span> Losing
+                    </button>
+                    <button class="toggle-btn" data-filter="friends" id="toggle-friends">
+                        <span class="icon">👥</span> Friends Only
+                    </button>
+                    <button class="toggle-btn" data-filter="me" id="toggle-me">
+                        <span class="icon">🙋</span> Me Only
+                    </button>
+                    <button class="toggle-btn unplayed" data-filter="unplayed" id="toggle-unplayed">
+                        <span class="icon">❌</span> Unplayed
+                    </button>
+                    <button class="toggle-btn" data-filter="hidden" id="toggle-hidden">
+                        <span class="icon">👁</span> Hidden
+                    </button>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <table id="data-table">
+                    <thead>
+                        <tr>
+                            <!-- Headers dynamically generated in JS -->
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Rows dynamically generated in JS -->
+                    </tbody>
+                </table>
+            </div>
+        </main>
+        
+        <div id="status-bar" class="status-bar">
+            <div id="status-text">Ready</div>
+            <div class="progress-container">
+                <div id="progress-bar" class="progress-bar"></div>
+            </div>
+        </div>
+        
+        <div id="log-panel" class="log-panel" style="display: none;">
+            <pre id="log-content"></pre>
+        </div>
+        
+        <div class="bottom-bar">
+            <button id="btn-log" class="bottom-btn"><span class="icon">▶</span> Log</button>
+            <button id="btn-clear" class="bottom-btn right-align">Clear</button>
+        </div>
+        <div id="login-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <h2>KovaaK's Login</h2>
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="login-username">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="login-password">
+                </div>
+                <div class="modal-buttons">
+                    <button id="btn-login-cancel" class="bottom-btn">Cancel</button>
+                    <button id="btn-login-submit" class="action-btn fetch-btn">Login & Fetch</button>
+                </div>
+            </div>
+        </div>
+        <div id="settings-modal" class="modal" style="display: none;">
+            <div class="modal-content" style="width: 400px;">
+                <h2>Settings</h2>
+                <div class="form-group">
+                    <label>KovaaKs Username</label>
+                    <input type="text" id="settings-username">
+                </div>
+                <div class="form-group">
+                    <label>KovaaKs Password</label>
+                    <input type="password" id="settings-password">
+                </div>
+                <div class="form-group">
+                    <label>Stats Folder</label>
+                    <input type="text" id="settings-stats-dir">
+                </div>
+                <div class="form-group">
+                    <label>Min Entries for Fetching</label>
+                    <input type="number" id="settings-min-entries">
+                </div>
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="settings-auto-refresh">
+                    <label for="settings-auto-refresh">Auto Refresh</label>
+                </div>
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="settings-auto-refresh-github">
+                    <label for="settings-auto-refresh-github">Wait for scenario data update</label>
+                </div>
+                <div class="form-group">
+                    <label>Refresh Interval (min)</label>
+                    <input type="number" id="settings-refresh-interval">
+                </div>
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="settings-always-show-total-points">
+                    <label for="settings-always-show-total-points">Always display total points</label>
+                </div>
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="settings-auto-fit-columns">
+                    <label for="settings-auto-fit-columns">Auto fit columns to window (disables resizing)</label>
+                </div>
+                <div class="modal-buttons">
+                    <button id="btn-settings-cancel" class="bottom-btn">Cancel</button>
+                    <button id="btn-settings-submit" class="action-btn">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="context-menu" class="context-menu" style="display: none;">
+        <div class="menu-item" id="menu-play-scenario">▶️ Play Scenario</div>
+        <div class="menu-item" id="menu-copy-scenario">📋 Copy Scenario Name</div>
+        <div class="menu-item" id="menu-toggle-hide">👁️ Hide/Unhide Scenario</div>
+    </div>
+    <div id="column-context-menu" class="context-menu" style="display: none;">
+    </div>
+    <div id="input-context-menu" class="context-menu" style="display: none;">
+        <div class="menu-item" id="menu-input-cut">✂️ Cut</div>
+        <div class="menu-item" id="menu-input-copy">📄 Copy</div>
+        <div class="menu-item" id="menu-input-paste">📋 Paste</div>
+        <div class="menu-item" id="menu-input-selectall">🔍 Select All</div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

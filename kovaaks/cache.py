@@ -30,12 +30,19 @@ def load_scores_cache():
 
 
 def save_scores_cache(cache_dict):
-    """Save the unified cache dict to gzip-compressed JSON."""
+    """Save the unified cache dict to gzip-compressed JSON atomically."""
+    tmp_cache = SCORES_CACHE + ".tmp"
     try:
-        with gzip.open(SCORES_CACHE, "wt", encoding="utf-8") as f:
+        with gzip.open(tmp_cache, "wt", encoding="utf-8") as f:
             json.dump(cache_dict, f, separators=(",", ":"))
+        os.replace(tmp_cache, SCORES_CACHE)
     except OSError as e:
         logger.warning("Could not save cache: %s", e)
+        if os.path.exists(tmp_cache):
+            try:
+                os.remove(tmp_cache)
+            except OSError:
+                pass
 
 
 def load_scenarios_from_cache(cache):
