@@ -655,6 +655,10 @@ class KovaaksAPI:
         if norm_name in self._zombies:
             self._update_status(f"Error: '{name}' has been deleted from Steam Workshop.")
             logger.warning("Scenario '%s' is a zombie scenario (deleted from Steam Workshop).", name)
+            if self.window:
+                import json
+                safe_name = json.dumps(name)
+                self.window.evaluate_js(f"if(window.onZombieDetected) window.onZombieDetected({safe_name})")
             return True
 
         # Optimistically launch the scenario immediately
@@ -678,6 +682,9 @@ class KovaaksAPI:
                         save_scores_cache(self._scores_cache)
                     self._update_status(f"Error: '{name}' has been deleted from Steam Workshop.")
                     if self.window:
+                        import json
+                        safe_name = json.dumps(name)
+                        self.window.evaluate_js(f"if(window.onZombieDetected) window.onZombieDetected({safe_name})")
                         self.window.evaluate_js("if(window.fetchData) window.fetchData()")
             except Exception as e:
                 logger.error("Error in background zombie check for '%s': %s", name, e)
