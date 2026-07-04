@@ -10,6 +10,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kovaaks_web import KovaaksAPI
 
 
+class SyncThread:
+    def __init__(self, target, args=(), kwargs=None, daemon=True):
+        self.target = target
+        self.args = args
+        self.kwargs = kwargs or {}
+    def start(self):
+        self.target(*self.args, **self.kwargs)
+
+
 @patch("kovaaks_web.load_config")
 @patch("kovaaks_web.load_scores_cache")
 def test_play_scenario(mock_load_cache, mock_load_config):
@@ -18,7 +27,9 @@ def test_play_scenario(mock_load_cache, mock_load_config):
 
     api = KovaaksAPI()
 
-    with patch("webbrowser.open") as mock_webbrowser_open:
+    with patch("kovaaks.api.is_scenario_zombie", return_value=False), \
+         patch("threading.Thread", SyncThread), \
+         patch("webbrowser.open") as mock_webbrowser_open:
         res = api.play_scenario("1wall 6targets TE")
         assert res is True
         mock_webbrowser_open.assert_called_once_with(
@@ -34,9 +45,11 @@ def test_play_scenario_handles_exception(mock_load_cache, mock_load_config):
 
     api = KovaaksAPI()
 
-    with patch("webbrowser.open", side_effect=Exception("Webbrowser error")):
+    with patch("kovaaks.api.is_scenario_zombie", return_value=False), \
+         patch("threading.Thread", SyncThread), \
+         patch("webbrowser.open", side_effect=Exception("Webbrowser error")):
         res = api.play_scenario("Pasu Voltaic Easy")
-        assert res is False
+        assert res is True
 
 
 @patch("kovaaks_web.load_config")

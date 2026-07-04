@@ -607,6 +607,7 @@ async function fetchData() {
 
             const showHidden = document.getElementById('toggle-hidden').classList.contains('active');
             currentData = await window.pywebview.api.get_data(cfg.min_entries || 1000, showHidden);
+            window.zombies = new Set(currentData.zombies || []);
             
             if (cfg.username && !initialFetchTriggered) {
                 initialFetchTriggered = true;
@@ -869,6 +870,12 @@ function renderNextBatch() {
         const row = filteredRows[i];
         const tr = document.createElement('tr');
         
+        const scenarioIndex = currentData.columns.indexOf("Scenario");
+        const scenarioName = row[scenarioIndex];
+        if (window.zombies && window.zombies.has(scenarioName)) {
+            tr.classList.add('zombie-row');
+        }
+        
         columnsToRender.forEach((col) => {
             const originalIndex = currentData.columns.indexOf(col);
             const cell = row[originalIndex];
@@ -962,7 +969,15 @@ function autoplayAdvance() {
         return;
     }
     
-    const nextIdx = currentIdx + 1;
+    let nextIdx = currentIdx + 1;
+    while (nextIdx < filteredRows.length) {
+        const nextScenario = filteredRows[nextIdx][scenarioCol];
+        if (window.zombies && window.zombies.has(nextScenario)) {
+            nextIdx++;
+        } else {
+            break;
+        }
+    }
     if (nextIdx >= filteredRows.length) {
         autoplayActive = false;
         const btn = document.getElementById('btn-autoplay');

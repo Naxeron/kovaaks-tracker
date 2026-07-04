@@ -66,6 +66,7 @@ class KovaaksAPI:
         if not self._scores_cache:
             self._scores_cache = load_scores_cache()
 
+        self._zombies = set(self._scores_cache.setdefault("zombies", []))
         all_scenarios = load_scenarios_from_cache(self._scores_cache)
         if not all_scenarios:
             return
@@ -170,6 +171,11 @@ class KovaaksAPI:
             sname = info["name"]
             if sname in SCENARIO_BLACKLIST:
                 continue
+
+            import re
+            norm_name = re.sub(r'[^a-z0-9]', '', sname.lower())
+            if hasattr(self, "_zombies") and norm_name in self._zombies:
+                continue
                 
             is_hidden = lid in self._hidden_scenarios
             if show_hidden and not is_hidden:
@@ -219,6 +225,10 @@ class KovaaksAPI:
 
             competition_multiplier = max(0.2, math.log10(max(1.0, popularity_trend + 1.0)) / 2.0)
 
+            import re
+            norm_name = re.sub(r'[^a-z0-9]', '', sname.lower())
+            is_zombie = hasattr(self, "_zombies") and norm_name in self._zombies
+
             row = {
                 "Scenario": sname,
                 "Entry Count": str(info["entries"]),
@@ -226,6 +236,7 @@ class KovaaksAPI:
                 "Trend Mult": f"{competition_multiplier:.2f}x",
                 "Local Runs": str(lstats["count"]),
                 "Potential": "",
+                "_is_zombie": is_zombie,
             }
 
             try:
@@ -449,8 +460,11 @@ class KovaaksAPI:
             cols = [c for c in cols if not c.startswith("_")]
             
             rows = []
+            zombies_list = []
             for d in all_data:
                 rows.append([d.get(c, "") for c in cols])
+                if d.get("_is_zombie"):
+                    zombies_list.append(d.get("Scenario"))
                 
             global_stats = {
                 "points": getattr(self, '_global_points_sum', 0),
@@ -459,7 +473,12 @@ class KovaaksAPI:
                 "total_rows": len(all_data)
             }
                 
-            return {"columns": cols, "rows": rows, "global_stats": global_stats}
+            return {
+                "columns": cols,
+                "rows": rows,
+                "global_stats": global_stats,
+                "zombies": zombies_list
+            }
         except Exception as e:
             logger.exception("Error in get_data")
             return {"columns": [], "rows": [], "global_stats": {}}
@@ -590,14 +609,46 @@ class KovaaksAPI:
         import urllib.parse
         import webbrowser
         from kovaaks.constants import STEAM_LAUNCH_URI
-        try:
-            uri = STEAM_LAUNCH_URI.format(urllib.parse.quote(name, safe=""))
-            self._update_status(f"Launching: {name}")
-            webbrowser.open(uri)
-            return True
-        except Exception as e:
-            logger.exception("Error launching scenario: %s", name)
-            return False
+        from kovaaks.api import is_scenario_zombie
+        from kovaaks.cache import save_scores_cache
+
+        if not hasattr(self, "_zombies"):
+            self._zombies = set(self._scores_cache.setdefault("zombies", []))
+
+        stats_dir = self._get_stats_dir()
+
+        def check_and_launch():
+            self._update_status(f"Checking scenario availability: {name}...")
+            try:
+                is_zombie = is_scenario_zombie(name, stats_dir, self._zombies)
+            except Exception as e:
+                logger.error("Error in background zombie check for '%s': %s", name, e)
+                is_zombie = False
+
+            if is_zombie:
+                import re
+                norm_name = re.sub(r'[^a-z0-9]', '', name.lower())
+                if norm_name not in self._zombies:
+                    self._zombies.add(norm_name)
+                    self._scores_cache["zombies"] = list(self._zombies)
+                    save_scores_cache(self._scores_cache)
+
+                self._update_status(f"Error: '{name}' has been deleted from Steam Workshop.")
+                logger.warning("Scenario '%s' is a zombie scenario (deleted from Steam Workshop).", name)
+
+                if self.window:
+                    self.window.evaluate_js("if(window.fetchData) window.fetchData()")
+            else:
+                try:
+                    uri = STEAM_LAUNCH_URI.format(urllib.parse.quote(name, safe=""))
+                    self._update_status(f"Launching: {name}")
+                    webbrowser.open(uri)
+                except Exception as e:
+                    logger.exception("Error launching scenario: %s", name)
+                    self._update_status(f"Error launching: {name}")
+
+        threading.Thread(target=check_and_launch, daemon=True).start()
+        return True
 
     def update_status(self, msg):
         self._update_status(msg)

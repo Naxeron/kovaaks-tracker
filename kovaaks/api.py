@@ -270,3 +270,89 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
         raise
 
     return local_points
+
+
+def is_scenario_zombie(name, stats_dir, cached_zombies=None):
+    """Detect if a scenario is a zombie scenario (deleted from Steam Workshop).
+
+    Checks:
+    1. If the name is in the cached_zombies set.
+    2. If the scenario's .sce file exists locally on disk (either in Saved/SaveGames/Scenarios
+       or in the Steam Workshop content folder).
+    3. If the scenario search on Steam Workshop returns a matching result under normalization.
+    """
+    import os
+    import re
+    import urllib.parse
+
+    def normalize(s):
+        return re.sub(r'[^a-z0-9]', '', s.lower())
+
+    normalized_name = normalize(name)
+
+    # 1. Check cache first
+    if cached_zombies and normalized_name in cached_zombies:
+        return True
+
+    # 2. Check local directories (no network request)
+    if stats_dir and os.path.exists(stats_dir):
+        fps_trainer_dir = os.path.dirname(stats_dir.rstrip('/\\'))
+        local_scenarios_dir = os.path.join(fps_trainer_dir, 'Saved', 'SaveGames', 'Scenarios')
+
+        # Go up 3 levels from fps_trainer_dir to get steamapps
+        steamapps_dir = os.path.dirname(os.path.dirname(os.path.dirname(fps_trainer_dir)))
+        workshop_dir = os.path.join(steamapps_dir, 'workshop', 'content', '824270')
+
+        # Check local Scenarios folder
+        if os.path.exists(local_scenarios_dir):
+            try:
+                for f in os.listdir(local_scenarios_dir):
+                    if f.endswith('.sce') and normalize(f[:-4]) == normalized_name:
+                        return False
+            except OSError:
+                pass
+
+        # Check Steam Workshop content folder
+        if os.path.exists(workshop_dir):
+            try:
+                for sd in os.listdir(workshop_dir):
+                    sd_path = os.path.join(workshop_dir, sd)
+                    if os.path.isdir(sd_path):
+                        for f in os.listdir(sd_path):
+                            if f.endswith('.sce') and normalize(f[:-4]) == normalized_name:
+                                return False
+            except OSError:
+                pass
+
+    # 3. Query Steam Workshop search page
+    quoted_name = urllib.parse.quote_plus(name)
+    url = f"https://steamcommunity.com/workshop/browse/?appid=824270&searchtext={quoted_name}&childpublishedfileid=0&browsesort=textsearch&section=readytouseitems"
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9"
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            return False  # Avoid false positives if Steam is down or rate-limiting
+
+        html = resp.text
+        # Extract titles using the robust regex
+        raw_titles = re.findall(r'title\\\\+\":\\\\+\"([^\\\"]+)', html)
+
+        for title in raw_titles:
+            clean_title = title.rstrip('\\')
+            if normalize(clean_title) == normalized_name:
+                return False
+
+        # No matching titles found on Workshop
+        return True
+    except Exception as e:
+        logger.warning("Error querying Steam Workshop for '%s': %s", name, e)
+        return False  # Avoid false positives on connection errors
+
