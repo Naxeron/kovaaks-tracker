@@ -196,9 +196,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('search-input').addEventListener('input', renderTable);
     
-    document.querySelector('.table-container').addEventListener('scroll', function(e) {
-        if (this.scrollTop + this.clientHeight >= this.scrollHeight - 200) {
-            renderNextBatch();
+    let lastScrollCheck = 0;
+    let scrollThrottleTimeout = null;
+    const tableContainer = document.querySelector('.table-container');
+    tableContainer.addEventListener('scroll', function() {
+        const now = Date.now();
+        const checkScroll = () => {
+            if (tableContainer.scrollTop + tableContainer.clientHeight >= tableContainer.scrollHeight - 200) {
+                renderNextBatch();
+            }
+        };
+        if (now - lastScrollCheck > 50) {
+            lastScrollCheck = now;
+            window.requestAnimationFrame(checkScroll);
+        } else {
+            if (scrollThrottleTimeout) clearTimeout(scrollThrottleTimeout);
+            scrollThrottleTimeout = setTimeout(() => {
+                window.requestAnimationFrame(checkScroll);
+            }, 50);
         }
     });
 

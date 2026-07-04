@@ -152,6 +152,10 @@ body {
     flex: 1;
     overflow-y: auto;
     overflow-x: auto;
+    will-change: transform;
+    transform: translate3d(0, 0, 0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
 }
 
 table {
