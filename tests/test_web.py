@@ -155,3 +155,38 @@ def test_style_css_selection():
     assert "-webkit-user-select: text" in log_content_block.group(0)
 
 
+def test_web_ui_optimizations():
+    # Verify style.css contains hardware acceleration properties on .table-container
+    css_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "web",
+        "style.css"
+    )
+    assert os.path.exists(css_path)
+    with open(css_path, "r", encoding="utf-8") as f:
+        content_css = f.read()
+
+    import re
+    table_container_block = re.search(r"\.table-container\s*\{[^}]*\}", content_css)
+    assert table_container_block is not None, "Could not find .table-container rule in style.css"
+    
+    assert "will-change: transform" in table_container_block.group(0)
+    assert "transform: translate3d(0, 0, 0)" in table_container_block.group(0)
+    assert "backface-visibility: hidden" in table_container_block.group(0)
+
+    # Verify script.js contains throttled scroll listeners using requestAnimationFrame
+    js_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "web",
+        "script.js"
+    )
+    assert os.path.exists(js_path)
+    with open(js_path, "r", encoding="utf-8") as f:
+        content_js = f.read()
+
+    assert "requestAnimationFrame" in content_js
+    assert "lastScrollCheck" in content_js
+    
+
+
+
