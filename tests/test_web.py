@@ -54,12 +54,13 @@ def test_update_status(mock_polling, mock_load_cache, mock_load_config):
     mock_window.evaluate_js.assert_called_with('if(window.setStatus) window.setStatus("Hello status")')
 
 
+@patch("kovaaks.cache.save_scores_cache")
 @patch("kovaaks_web.load_config")
 @patch("kovaaks_web.load_scores_cache")
 @patch("os.path.exists")
 @patch("os.listdir")
 @patch("threading.Thread")
-def test_start_stats_polling(mock_thread, mock_listdir, mock_exists, mock_load_cache, mock_load_config):
+def test_start_stats_polling(mock_thread, mock_listdir, mock_exists, mock_load_cache, mock_load_config, mock_save):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000, "stats_dir": "/fake/stats"}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
     mock_exists.return_value = True
@@ -69,10 +70,50 @@ def test_start_stats_polling(mock_thread, mock_listdir, mock_exists, mock_load_c
     ]
 
     api = KovaaksAPI()
+    mock_thread.reset_mock()
     api._start_stats_polling()
 
     assert "1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv" in api._known_stat_files
     mock_thread.assert_called_once()
+    mock_save.assert_called()
+
+
+@patch("kovaaks.cache.save_scores_cache")
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("os.path.exists")
+@patch("os.listdir")
+@patch("threading.Thread")
+def test_start_stats_polling_with_new_files(
+    mock_thread, mock_listdir, mock_exists, mock_load_cache, mock_load_config, mock_save
+):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000, "stats_dir": "/fake/stats"}
+    mock_load_cache.return_value = {
+        "scenarios": [],
+        "scores": {},
+        "entry_history": {},
+        "known_stat_files": ["1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv"]
+    }
+    mock_exists.return_value = True
+    mock_listdir.return_value = [
+        "1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv",
+        "1w6ts Reload - Challenge - 2026.05.10-13.00.00 Stats.csv",
+        "some_other_file.txt",
+    ]
+
+    api = KovaaksAPI()
+    mock_thread.reset_mock()
+    mock_save.reset_mock()
+    
+    api._start_stats_polling()
+
+    assert "1w6ts Reload - Challenge - 2026.05.10-13.00.00 Stats.csv" in api._known_stat_files
+    assert "1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv" in api._known_stat_files
+    
+    # 1 for poll loop, 1 for _handle_new_stats_files
+    assert mock_thread.call_count == 2
+    mock_save.assert_called()
+
 
 
 @patch("kovaaks_web.load_config")
@@ -174,7 +215,7 @@ def test_web_ui_optimizations():
     assert "transform: translate3d(0, 0, 0)" in table_container_block.group(0)
     assert "backface-visibility: hidden" in table_container_block.group(0)
 
-    # Verify script.js contains throttled scroll listeners using requestAnimationFrame
+    # Verify script.js contains throttled scroll listeners and smooth scroll interpolators
     js_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "web",
@@ -186,6 +227,26 @@ def test_web_ui_optimizations():
 
     assert "requestAnimationFrame" in content_js
     assert "lastScrollCheck" in content_js
+    assert "resetScrollInterpolation" in content_js
+    assert "targetScrollTop" in content_js
+    assert "isAnimatingScroll" in content_js
+    assert "animateScroll" in content_js
+
+    # Verify kovaaks_web.py sets the environment variable and checks sys.argv for --gui
+    py_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "kovaaks_web.py"
+    )
+    assert os.path.exists(py_path)
+    with open(py_path, "r", encoding="utf-8") as f:
+        content_py = f.read()
+
+    assert "WEBKIT_DISABLE_DMABUF_RENDERER" in content_py
+    assert "--gui" in content_py
+    assert "sys.argv" in content_py
+
+
+
     
 
 

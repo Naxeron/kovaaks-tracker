@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-import webview
-import json
 import os
 import sys
+
+# Disable WebKitGTK DMABuf renderer to fix scrolling lag/flicker on Linux
+if sys.platform.startswith('linux'):
+    os.environ["WEBKIT_DISABLE_DMABUF_RENDERER"] = "1"
+
+import webview
+import json
 import logging
 import threading
 import time
@@ -538,8 +543,25 @@ class KovaaksAPI:
 
     def save_settings(self, settings):
         from kovaaks.config_helpers import save_config
+        old_stats_dir = self._cfg.get("stats_dir")
         self._cfg.update(settings)
         save_config(self._cfg)
+        
+        new_stats_dir = self._cfg.get("stats_dir")
+        if old_stats_dir != new_stats_dir:
+            self._known_stat_files.clear()
+            stats_dir = self._get_stats_dir()
+            if os.path.exists(stats_dir):
+                try:
+                    for f in os.listdir(stats_dir):
+                        if f.endswith(" Stats.csv"):
+                            self._known_stat_files.add(f)
+                except OSError:
+                    pass
+            self._scores_cache["known_stat_files"] = list(self._known_stat_files)
+            from kovaaks.cache import save_scores_cache
+            save_scores_cache(self._scores_cache)
+            self._local_stats_dirty = True
 
     def save_credentials(self, username, password):
         from kovaaks.config_helpers import save_config
@@ -584,9 +606,25 @@ class KovaaksAPI:
         stats_dir = self._get_stats_dir()
         if os.path.exists(stats_dir):
             try:
-                for f in os.listdir(stats_dir):
-                    if f.endswith(" Stats.csv"):
-                        self._known_stat_files.add(f)
+                current_files = set(f for f in os.listdir(stats_dir) if f.endswith(" Stats.csv"))
+                if "known_stat_files" in self._scores_cache:
+                    cached_known = set(self._scores_cache["known_stat_files"])
+                    new_files = current_files - cached_known
+                else:
+                    new_files = set()
+                
+                self._known_stat_files = current_files
+                self._scores_cache["known_stat_files"] = list(self._known_stat_files)
+                from kovaaks.cache import save_scores_cache
+                save_scores_cache(self._scores_cache)
+                
+                if new_files:
+                    self._local_stats_dirty = True
+                    threading.Thread(
+                        target=self._handle_new_stats_files,
+                        args=(stats_dir, new_files),
+                        daemon=True
+                    ).start()
             except OSError:
                 pass
         
@@ -603,6 +641,10 @@ class KovaaksAPI:
                 new_files = current_files - self._known_stat_files
                 if new_files:
                     self._known_stat_files.update(new_files)
+                    self._scores_cache["known_stat_files"] = list(self._known_stat_files)
+                    from kovaaks.cache import save_scores_cache
+                    save_scores_cache(self._scores_cache)
+                    
                     self._local_stats_dirty = True
                     self._handle_new_stats_files(stats_dir, new_files)
             except OSError:
@@ -754,6 +796,13 @@ if __name__ == "__main__":
         background_color="#121212"
     )
     api.set_window(window)
-    # Force GTK backend on Linux (QtWebKit is deprecated and crashes on modern Arch)
+    # Force GTK backend on Linux by default (QtWebKit is deprecated and crashes on modern Arch),
+    # but allow overriding it via '--gui <backend>' (e.g., '--gui qt') if modern QtWebEngine is installed.
     gui_backend = 'gtk' if sys.platform.startswith('linux') else None
+    if "--gui" in sys.argv:
+        try:
+            idx = sys.argv.index("--gui")
+            gui_backend = sys.argv[idx + 1]
+        except (ValueError, IndexError):
+            pass
     webview.start(gui=gui_backend, debug=False)

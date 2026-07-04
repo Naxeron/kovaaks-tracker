@@ -819,6 +819,9 @@ class KovaaksApp(tk.Tk):
                                 self._known_stat_files.add(f)
                     except OSError:
                         pass
+                self._scores_cache["known_stat_files"] = list(self._known_stat_files)
+                from kovaaks.cache import save_scores_cache
+                save_scores_cache(self._scores_cache)
                 self._rebuild_data()
 
     # -------------------------------------------------------------------
@@ -1666,14 +1669,29 @@ class KovaaksApp(tk.Tk):
     # -------------------------------------------------------------------
     def _start_stats_polling(self):
         stats_dir = self._get_stats_dir()
-        if not os.path.exists(stats_dir):
-            return
-        try:
-            for f in os.listdir(stats_dir):
-                if f.endswith(" Stats.csv"):
-                    self._known_stat_files.add(f)
-        except OSError:
-            pass
+        if os.path.exists(stats_dir):
+            try:
+                current_files = set(f for f in os.listdir(stats_dir) if f.endswith(" Stats.csv"))
+                if "known_stat_files" in self._scores_cache:
+                    cached_known = set(self._scores_cache["known_stat_files"])
+                    new_files = current_files - cached_known
+                else:
+                    new_files = set()
+                
+                self._known_stat_files = current_files
+                self._scores_cache["known_stat_files"] = list(self._known_stat_files)
+                from kovaaks.cache import save_scores_cache
+                save_scores_cache(self._scores_cache)
+                
+                if new_files:
+                    self._local_stats_dirty = True
+                    threading.Thread(
+                        target=self._handle_new_stats_files,
+                        args=(stats_dir, new_files,),
+                        daemon=True
+                    ).start()
+            except OSError:
+                pass
         self._poll_stats_folder()
 
     def _poll_stats_folder(self):
@@ -1683,6 +1701,10 @@ class KovaaksApp(tk.Tk):
             new_files = current_files - self._known_stat_files
             if new_files:
                 self._known_stat_files.update(new_files)
+                self._scores_cache["known_stat_files"] = list(self._known_stat_files)
+                from kovaaks.cache import save_scores_cache
+                save_scores_cache(self._scores_cache)
+                
                 self._local_stats_dirty = True
                 threading.Thread(target=self._handle_new_stats_files, args=(stats_dir, new_files,), daemon=True).start()
         except OSError:

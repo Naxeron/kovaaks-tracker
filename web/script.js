@@ -199,7 +199,17 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastScrollCheck = 0;
     let scrollThrottleTimeout = null;
     const tableContainer = document.querySelector('.table-container');
+
+    let targetScrollTop = tableContainer.scrollTop;
+    let currentScrollTop = tableContainer.scrollTop;
+    let isAnimatingScroll = false;
+
     tableContainer.addEventListener('scroll', function() {
+        if (!isAnimatingScroll) {
+            targetScrollTop = tableContainer.scrollTop;
+            currentScrollTop = tableContainer.scrollTop;
+        }
+
         const now = Date.now();
         const checkScroll = () => {
             if (tableContainer.scrollTop + tableContainer.clientHeight >= tableContainer.scrollHeight - 200) {
@@ -216,6 +226,43 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 50);
         }
     });
+
+    tableContainer.addEventListener('wheel', function(e) {
+        if (e.deltaY === 0) return;
+        
+        e.preventDefault();
+        
+        targetScrollTop = Math.max(0, Math.min(
+            tableContainer.scrollHeight - tableContainer.clientHeight,
+            targetScrollTop + e.deltaY * 0.8
+        ));
+        
+        if (!isAnimatingScroll) {
+            animateScroll();
+        }
+    }, { passive: false });
+
+    function animateScroll() {
+        isAnimatingScroll = true;
+        const diff = targetScrollTop - currentScrollTop;
+        if (Math.abs(diff) < 0.5) {
+            tableContainer.scrollTop = targetScrollTop;
+            currentScrollTop = targetScrollTop;
+            isAnimatingScroll = false;
+            return;
+        }
+        currentScrollTop += diff * 0.15;
+        tableContainer.scrollTop = currentScrollTop;
+        window.requestAnimationFrame(animateScroll);
+    }
+
+    window.resetScrollInterpolation = function() {
+        if (tableContainer) {
+            targetScrollTop = tableContainer.scrollTop;
+            currentScrollTop = tableContainer.scrollTop;
+        }
+        isAnimatingScroll = false;
+    };
 
     // Context Menu logic
     let contextMenuScenario = null;
@@ -603,6 +650,7 @@ function renderTable() {
     thead.innerHTML = '';
     tbody.innerHTML = '';
     renderedRowsCount = 0;
+    if (window.resetScrollInterpolation) window.resetScrollInterpolation();
 
     if (!currentData.columns || currentData.columns.length === 0) return;
 
