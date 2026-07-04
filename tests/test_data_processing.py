@@ -233,6 +233,7 @@ class TestRebuildDataRows:
                 self._next_rank_var = MagicMock()
                 self._unplayed_needed_var = MagicMock()
                 self._aim_type_avgs = {}
+                self._hidden_scenarios = set()
                 
             def _get_stats_dir(self):
                 return "/nonexistent"
