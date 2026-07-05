@@ -394,3 +394,35 @@ def test_play_scenario_bg_zombie_notifies_frontend(mock_load_cache, mock_load_co
         calls = [c[0][0] for c in mock_window.evaluate_js.call_args_list]
         assert any("onZombieDetected" in call and "Pasu Voltaic Easy" in call for call in calls)
         assert any("fetchData" in call for call in calls)
+
+
+def test_log_panel_ui_elements():
+    # Verify index.html contains log-context-menu and its items
+    html_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "web",
+        "index.html"
+    )
+    assert os.path.exists(html_path)
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+    
+    assert 'id="log-context-menu"' in html_content
+    assert 'id="menu-log-copy"' in html_content
+    assert 'id="menu-log-selectall"' in html_content
+
+    # Verify script.js contains the context menu logic, mousedown state tracking and the isSelectingLog helper
+    js_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "web",
+        "script.js"
+    )
+    assert os.path.exists(js_path)
+    with open(js_path, "r", encoding="utf-8") as f:
+        js_content = f.read()
+
+    assert "isMouseDownOnLogs" in js_content
+    assert "isSelectingLog" in js_content
+    assert "logContextMenu" in js_content
+    assert "menu-log-copy" in js_content
+    assert "menu-log-selectall" in js_content
