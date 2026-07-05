@@ -1,20 +1,20 @@
 # AI Assistant Guidelines for KovaaKs Tracker
 
-You are assisting in developing the KovaaKs Tracker project. Follow these guidelines at all times.
+Assist developing KovaaKs Tracker. Follow guidelines.
 
 ## 1. Testing is Mandatory
-Whenever you implement a new feature, modify business logic, or fix a bug, you **must** implement or update corresponding automated tests.
-* **Regression Tests**: For bug fixes, write a test that verifies the failure condition is resolved and does not regress.
-* **Unit/Integration Tests**: For features, write tests covering core computations, edge cases, and error handling.
-* **Test Location**: Put python tests under the `tests/` directory with the filename prefix `test_`.
-* **Verification**: Before completing any task, run the test suite via `pytest` to ensure all tests pass (no regressions allowed). Note that `pytest` is configured via `pytest.ini` to only scan the `tests/` directory. This prevents scratch/development files from accidentally loading Tkinter or launching visual GUI windows, keeping the test run headless, focus-uninterrupting, and extremely fast (completing in under 0.2 seconds). Avoid importing `tkinter` or instantiating GUI widgets at the module level in any test code.
+Implement or update automated tests for features, business logic, bugs.
+* **Regression Tests**: Verify bug fix, prevent regression.
+* **Unit/Integration Tests**: Cover core computations, edge cases, error handling.
+* **Test Location**: Put Python tests under `tests/` directory, filename prefix `test_`.
+* **Verification**: Run `pytest` before completion. Ensure tests pass. `pytest` only scans `tests/` via `pytest.ini` for headless, fast runs. Do not import `tkinter` or instantiate GUI widgets at module level in tests.
 
 ## 2. Code Quality & Idiomatic Python
-* Write idiomatic, clean Python code. Prefer list comprehensions, generator expressions, and Python built-ins over verbose loops.
-* Use safe type casting helper functions (like `safe_int` and `safe_float` in `data_processing.py`) to prevent uncaught value/type errors.
-* Maintain clean docstrings and comments. Do not delete existing comments unless they are obsolete or directly contradicted by the changes.
+* Write clean Python. Prefer list comprehensions, generator expressions, built-ins over loops.
+* Use safe type casting (`safe_int`, `safe_float` in `data_processing.py`). Prevent uncaught errors.
+* Maintain docstrings, comments. Do not delete existing comments.
 
 ## 3. UI and Concurrency Safety
-* Always keep the main GUI thread responsive. Perform network requests, API queries, or file parsing in background threads or daemon worker threads.
-* Safely wrap background operations in `try-finally` structures and clean error-handling to prevent threads from hanging or silently failing.
-* Ensure UI state variables (such as status bars, progress bars, and labels) are updated on all execution paths (including early returns, rate-limits, and exceptions).
+* Keep main GUI thread responsive. Run network requests, API queries, file parsing in background or daemon threads.
+* Wrap background operations in `try-finally`. Prevent threads hanging or failing silently.
+* Update UI state (status/progress bars, labels) on all execution paths.
