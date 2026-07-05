@@ -87,6 +87,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!cfg.username || !cfg.has_password) {
                 document.getElementById('login-username').value = cfg.username || '';
                 document.getElementById('login-password').value = '';
+                document.getElementById('login-show-password').checked = false;
+                document.getElementById('login-password').type = 'password';
                 document.getElementById('login-modal').style.display = 'flex';
                 return;
             }
@@ -98,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('login-modal').style.display = 'none';
     });
 
-    document.getElementById('btn-login-submit').addEventListener('click', async () => {
+    const triggerLoginSubmit = async () => {
         const user = document.getElementById('login-username').value;
         const pass = document.getElementById('login-password').value;
         if (user && pass) {
@@ -106,7 +108,43 @@ document.addEventListener('DOMContentLoaded', () => {
             await window.pywebview.api.save_credentials(user, pass);
             startFetch();
         }
+    };
+
+    document.getElementById('btn-login-submit').addEventListener('click', triggerLoginSubmit);
+
+    // Accept Enter key on login inputs
+    ['login-username', 'login-password'].forEach(id => {
+        const inputEl = document.getElementById(id);
+        if (inputEl) {
+            inputEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    triggerLoginSubmit();
+                }
+            });
+        }
     });
+
+    // Toggle for unhiding password in login prompt
+    const loginShowPass = document.getElementById('login-show-password');
+    if (loginShowPass) {
+        loginShowPass.addEventListener('change', function() {
+            const passInput = document.getElementById('login-password');
+            if (passInput) {
+                passInput.type = this.checked ? 'text' : 'password';
+            }
+        });
+    }
+
+    // Toggle for unhiding password in settings
+    const settingsShowPass = document.getElementById('settings-show-password');
+    if (settingsShowPass) {
+        settingsShowPass.addEventListener('change', function() {
+            const passInput = document.getElementById('settings-password');
+            if (passInput) {
+                passInput.type = this.checked ? 'text' : 'password';
+            }
+        });
+    }
 
     // Settings logic
     document.getElementById('btn-settings').addEventListener('click', async () => {
@@ -114,6 +152,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const cfg = await window.pywebview.api.get_config();
             document.getElementById('settings-username').value = cfg.username || '';
             document.getElementById('settings-password').value = cfg.password || '';
+            document.getElementById('settings-show-password').checked = false;
+            document.getElementById('settings-password').type = 'password';
             document.getElementById('settings-stats-dir').value = cfg.stats_dir || '';
             document.getElementById('settings-min-entries').value = cfg.min_entries || 1000;
             document.getElementById('settings-auto-refresh').checked = cfg.auto_refresh || false;
@@ -724,6 +764,8 @@ async function fetchData() {
                     setTimeout(() => {
                         document.getElementById('login-username').value = cfg.username;
                         document.getElementById('login-password').value = '';
+                        document.getElementById('login-show-password').checked = false;
+                        document.getElementById('login-password').type = 'password';
                         document.getElementById('login-modal').style.display = 'flex';
                     }, 500);
                 } else {

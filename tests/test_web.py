@@ -501,3 +501,34 @@ def test_get_clipboard_tkinter_fallback(mock_load_cache, mock_load_config):
         mock_root.clipboard_get.assert_called_once()
         mock_root.destroy.assert_called_once()
 
+
+def test_login_modal_enter_and_password_toggle():
+    # Verify index.html contains show password toggles
+    html_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "web",
+        "index.html"
+    )
+    assert os.path.exists(html_path)
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+
+    assert 'id="login-show-password"' in html_content
+    assert 'id="settings-show-password"' in html_content
+
+    # Verify script.js contains the keydown/enter key and toggle change listener logics
+    js_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "web",
+        "script.js"
+    )
+    assert os.path.exists(js_path)
+    with open(js_path, "r", encoding="utf-8") as f:
+        js_content = f.read()
+
+    assert "login-show-password" in js_content
+    assert "settings-show-password" in js_content
+    assert "triggerLoginSubmit" in js_content
+    assert "Enter" in js_content
+
+
