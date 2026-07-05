@@ -417,12 +417,7 @@ class KovaaksAPI:
 
 
 
-    def run_in_gui_thread(self, func):
-        func()
-        
-    def _set_running(self, running):
-        pass
-        
+
     def _rebuild_data_and_finish(self, errors=0):
         self._update_status(f"Fetch complete with {errors} errors.")
         self._update_progress(0, 0)
@@ -621,6 +616,69 @@ class KovaaksAPI:
         save_config(self._cfg)
 
     def get_clipboard(self):
+        import sys
+        import subprocess
+
+        # 1. macOS fallback using pbpaste
+        if sys.platform == "darwin":
+            try:
+                return subprocess.check_output(["pbpaste"], text=True)
+            except Exception:
+                pass
+
+        # 2. Linux fallback using xclip or xsel
+        elif sys.platform.startswith("linux"):
+            for cmd in [["xclip", "-selection", "clipboard", "-o"], ["xsel", "-b", "-o"]]:
+                try:
+                    return subprocess.check_output(cmd, text=True)
+                except Exception:
+                    continue
+
+        # 3. Windows fallback using ctypes
+        elif sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                
+                OpenClipboard = ctypes.windll.user32.OpenClipboard
+                OpenClipboard.argtypes = [wintypes.HWND]
+                OpenClipboard.restype = wintypes.BOOL
+                
+                GetClipboardData = ctypes.windll.user32.GetClipboardData
+                GetClipboardData.argtypes = [wintypes.UINT]
+                GetClipboardData.restype = wintypes.HANDLE
+                
+                CloseClipboard = ctypes.windll.user32.CloseClipboard
+                CloseClipboard.argtypes = []
+                CloseClipboard.restype = wintypes.BOOL
+                
+                GlobalLock = ctypes.windll.kernel32.GlobalLock
+                GlobalLock.argtypes = [wintypes.HANDLE]
+                GlobalLock.restype = ctypes.c_void_p
+                
+                GlobalUnlock = ctypes.windll.kernel32.GlobalUnlock
+                GlobalUnlock.argtypes = [wintypes.HANDLE]
+                GlobalUnlock.restype = wintypes.BOOL
+                
+                CF_UNICODETEXT = 13
+                
+                if OpenClipboard(None):
+                    try:
+                        h_clip_mem = GetClipboardData(CF_UNICODETEXT)
+                        if h_clip_mem:
+                            p_clip_mem = GlobalLock(h_clip_mem)
+                            if p_clip_mem:
+                                try:
+                                    text = ctypes.c_wchar_p(p_clip_mem).value
+                                    return text or ""
+                                finally:
+                                    GlobalUnlock(h_clip_mem)
+                    finally:
+                        CloseClipboard()
+            except Exception:
+                pass
+
+        # 4. Final fallback using tkinter
         try:
             import tkinter as tk
             root = tk.Tk()
