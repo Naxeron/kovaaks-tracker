@@ -163,6 +163,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Log panel logic
     let logInterval = null;
+    let isMouseDownOnLogs = false;
+
+    const logPanel = document.getElementById('log-panel');
+    if (logPanel) {
+        logPanel.addEventListener('mousedown', () => {
+            isMouseDownOnLogs = true;
+        });
+        document.addEventListener('mouseup', () => {
+            isMouseDownOnLogs = false;
+        });
+    }
+
+    function isSelectingLog() {
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed) return false;
+        const content = document.getElementById('log-content');
+        if (!content) return false;
+        try {
+            const range = sel.getRangeAt(0);
+            return content.contains(range.startContainer) || content.contains(range.endContainer);
+        } catch (e) {
+            return false;
+        }
+    }
+
     document.getElementById('btn-log').addEventListener('click', async () => {
         const panel = document.getElementById('log-panel');
         if (panel.style.display === 'none') {
@@ -189,8 +214,26 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.pywebview && window.pywebview.api) {
             const logs = await window.pywebview.api.get_logs();
             const content = document.getElementById('log-content');
+            if (!content) return;
+            const parent = content.parentElement;
+            
+            // If the logs are exactly the same, do nothing to prevent unnecessary DOM mutations and selection resets
+            if (content.textContent === logs) {
+                return;
+            }
+            
+            // If user is selecting or holds mouse down, skip updating logs to preserve selection
+            if (isMouseDownOnLogs || isSelectingLog()) {
+                return;
+            }
+            
+            const wasAtBottom = (parent.scrollHeight - parent.scrollTop - parent.clientHeight) < 20;
+            
             content.textContent = logs;
-            content.parentElement.scrollTop = content.parentElement.scrollHeight;
+            
+            if (wasAtBottom) {
+                parent.scrollTop = parent.scrollHeight;
+            }
         }
     }
 
@@ -268,6 +311,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let contextMenuScenario = null;
     const contextMenu = document.getElementById('context-menu');
     const columnContextMenu = document.getElementById('column-context-menu');
+    const logContextMenu = document.getElementById('log-context-menu');
     
     document.getElementById('data-table').addEventListener('contextmenu', (e) => {
         const th = e.target.closest('th');
@@ -329,6 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
             columnContextMenu.style.top = e.pageY + 'px';
             
             contextMenu.style.display = 'none';
+            if (logContextMenu) logContextMenu.style.display = 'none';
             return;
         }
 
@@ -347,6 +392,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             columnContextMenu.style.display = 'none';
             inputContextMenu.style.display = 'none';
+            if (logContextMenu) logContextMenu.style.display = 'none';
         }
     });
 
@@ -362,6 +408,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Hide other context menus
             contextMenu.style.display = 'none';
             columnContextMenu.style.display = 'none';
+            if (logContextMenu) logContextMenu.style.display = 'none';
             
             // Show input context menu
             inputContextMenu.style.display = 'block';
@@ -379,6 +426,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (!inputContextMenu.contains(e.target)) {
             inputContextMenu.style.display = 'none';
+        }
+        if (logContextMenu && !logContextMenu.contains(e.target)) {
+            logContextMenu.style.display = 'none';
         }
     });
 
@@ -451,6 +501,65 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         inputContextMenu.style.display = 'none';
     });
+
+    // Log Context Menu logic
+    if (logPanel && logContextMenu) {
+        logPanel.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            
+            // Hide other context menus
+            contextMenu.style.display = 'none';
+            columnContextMenu.style.display = 'none';
+            inputContextMenu.style.display = 'none';
+            
+            // Enable/disable copy depending on whether there's selection
+            const copyItem = document.getElementById('menu-log-copy');
+            if (copyItem) {
+                if (isSelectingLog()) {
+                    copyItem.style.opacity = '1';
+                    copyItem.style.pointerEvents = 'auto';
+                } else {
+                    copyItem.style.opacity = '0.5';
+                    copyItem.style.pointerEvents = 'none';
+                }
+            }
+            
+            logContextMenu.style.display = 'block';
+            logContextMenu.style.left = e.pageX + 'px';
+            logContextMenu.style.top = e.pageY + 'px';
+        });
+
+        const logCopyBtn = document.getElementById('menu-log-copy');
+        if (logCopyBtn) {
+            logCopyBtn.addEventListener('click', () => {
+                const sel = window.getSelection();
+                if (sel) {
+                    const selectedText = sel.toString();
+                    if (selectedText) {
+                        navigator.clipboard.writeText(selectedText);
+                    }
+                }
+                logContextMenu.style.display = 'none';
+            });
+        }
+
+        const logSelectAllBtn = document.getElementById('menu-log-selectall');
+        if (logSelectAllBtn) {
+            logSelectAllBtn.addEventListener('click', () => {
+                const content = document.getElementById('log-content');
+                if (content) {
+                    const range = document.createRange();
+                    range.selectNodeContents(content);
+                    const sel = window.getSelection();
+                    if (sel) {
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    }
+                }
+                logContextMenu.style.display = 'none';
+            });
+        }
+    }
 
     document.getElementById('menu-play-scenario').addEventListener('click', () => {
         if (contextMenuScenario && window.pywebview && window.pywebview.api) {
