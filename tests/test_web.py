@@ -426,3 +426,78 @@ def test_log_panel_ui_elements():
     assert "logContextMenu" in js_content
     assert "menu-log-copy" in js_content
     assert "menu-log-selectall" in js_content
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+def test_get_clipboard_linux(mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    
+    with patch("sys.platform", "linux"), \
+         patch("subprocess.check_output", return_value="pasted_text_linux") as mock_check_output:
+        val = api.get_clipboard()
+        assert val == "pasted_text_linux"
+        mock_check_output.assert_called_with(["xclip", "-selection", "clipboard", "-o"], text=True)
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+def test_get_clipboard_darwin(mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    
+    with patch("sys.platform", "darwin"), \
+         patch("subprocess.check_output", return_value="pasted_text_mac") as mock_check_output:
+        val = api.get_clipboard()
+        assert val == "pasted_text_mac"
+        mock_check_output.assert_called_once_with(["pbpaste"], text=True)
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+def test_get_clipboard_windows(mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    
+    mock_ctypes = MagicMock()
+    mock_ctypes.windll.user32.OpenClipboard.return_value = True
+    mock_ctypes.windll.user32.GetClipboardData.return_value = 12345
+    mock_ctypes.windll.kernel32.GlobalLock.return_value = 67890
+    mock_ctypes.c_wchar_p.return_value.value = "pasted_text_windows"
+    mock_ctypes.windll.kernel32.GlobalUnlock.return_value = True
+    mock_ctypes.windll.user32.CloseClipboard.return_value = True
+    
+    with patch("sys.platform", "win32"), \
+         patch.dict("sys.modules", {"ctypes": mock_ctypes}):
+        val = api.get_clipboard()
+        assert val == "pasted_text_windows"
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+def test_get_clipboard_tkinter_fallback(mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    
+    mock_tk = MagicMock()
+    mock_root = MagicMock()
+    mock_tk.Tk.return_value = mock_root
+    mock_root.clipboard_get.return_value = "pasted_text_tkinter"
+    
+    with patch("sys.platform", "unknown_os"), \
+         patch.dict("sys.modules", {"tkinter": mock_tk}):
+        val = api.get_clipboard()
+        assert val == "pasted_text_tkinter"
+        mock_tk.Tk.assert_called_once()
+        mock_root.clipboard_get.assert_called_once()
+        mock_root.destroy.assert_called_once()
+

@@ -100,7 +100,7 @@ def run_fetch_all(app, username, password):
         app._user_by_lid, app._friends_by_lid = user_by_lid, friends_by_lid
 
         if not app._jwt_token:
-            app.run_in_gui_thread(app._rebuild_data)
+            app._rebuild_data()
             app._update_status(f"Done (Scenario list updated) — {len(master)} scenarios.")
             app._update_progress(100, 100)
             return
@@ -126,11 +126,11 @@ def run_fetch_all(app, username, password):
         cached_count = len(all_lids) - total_to_fetch
 
         if total_to_fetch == 0:
-            app.run_in_gui_thread(app._rebuild_data_and_finish)
+            app._rebuild_data_and_finish()
             return
 
         app._update_status(f"Fetching scores for {total_to_fetch} scenarios ({cached_count} cached)…")
-        app.run_in_gui_thread(app._rebuild_data)
+        app._rebuild_data()
 
         lock = threading.Lock()
         errors = completed = 0
@@ -191,7 +191,7 @@ def run_fetch_all(app, username, password):
                 
             if done - last_refresh[0] >= 100:
                 last_refresh[0] = done
-                app.run_in_gui_thread(app._rebuild_data)
+                app._rebuild_data()
 
         session = requests.Session()
         with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
@@ -204,11 +204,11 @@ def run_fetch_all(app, username, password):
             return
 
         with lock: _save_cache()
-        app.run_in_gui_thread(lambda: app._rebuild_data_and_finish(errors))
+        app._rebuild_data_and_finish(errors)
 
     except Exception as e:
         logger.exception("Error in fetch thread")
         app._update_status(f"Error: {e}")
     finally:
-        app.run_in_gui_thread(lambda: app._set_running(False))
+        pass
 

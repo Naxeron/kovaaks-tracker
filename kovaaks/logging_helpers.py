@@ -56,21 +56,3 @@ def setup_logging():
     logger.info(LAUNCH_MARKER)
     
     return logger
-
-class StdoutRedirector:
-    """Redirect stdout/stderr writes to a callback while keeping the original."""
-
-    def __init__(self, callback, original):
-        self._callback = callback
-        self._original = original
-
-    def write(self, text):
-        if self._original:
-            self._original.write(text)
-        if text and text.strip():
-            self._callback(text.strip())
-        return len(text) if text else 0
-
-    def flush(self):
-        if self._original:
-            self._original.flush()
