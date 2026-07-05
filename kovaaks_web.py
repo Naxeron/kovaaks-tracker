@@ -398,7 +398,7 @@ class KovaaksAPI:
 
     def _rebuild_data_and_finish(self, errors=0):
         self._update_status(f"Fetch complete with {errors} errors.")
-        self._update_progress(0, 0)
+        self._update_progress(1.0, 1.0)
         if self.window:
             self.window.evaluate_js("fetchData()")
 
@@ -415,7 +415,8 @@ class KovaaksAPI:
                 except ValueError:
                     pass
 
-        for s in scenarios_list:
+        total_scenarios = len(scenarios_list)
+        for idx, s in enumerate(scenarios_list):
             lid = str(s.get("leaderboardId", ""))
             try:
                 entries = int(s.get("counts", {}).get("entries", 0))
@@ -433,6 +434,11 @@ class KovaaksAPI:
             lid_history[now_str] = entries
             while len(lid_history) > 168:
                 del lid_history[min(lid_history.keys())]
+            
+            if idx % 1000 == 0 and hasattr(self, "_update_progress"):
+                progress = 0.15 + 0.07 * (idx / total_scenarios if total_scenarios > 0 else 0)
+                self._update_progress(progress, 1.0)
+
         self._scores_cache["entry_history"] = history
 
     def get_data(self, min_entries, show_hidden=False):

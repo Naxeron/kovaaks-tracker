@@ -1042,16 +1042,16 @@ function setLoading(isLoading, text = "") {
     const bar = document.getElementById('progress-bar');
     if (isLoading) {
         setStatus(text);
-        bar.style.width = '100%';
-        bar.style.animation = 'pulse 1.5s infinite';
+        bar.classList.add('indeterminate');
     } else {
-        bar.style.animation = 'none';
+        bar.classList.remove('indeterminate');
         bar.style.width = '0%';
     }
 }
 
 window.updateProgress = function(current, total, message) {
     const bar = document.getElementById('progress-bar');
+    bar.classList.remove('indeterminate');
     if (total > 0) {
         const pct = (current / total) * 100;
         bar.style.width = pct + '%';

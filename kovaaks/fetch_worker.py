@@ -43,40 +43,52 @@ def fetch_gzip_json_from_github(filename, app):
 def run_fetch_all(app, username, password):
     """Background worker that fetches all scenarios and updates the GUI state."""
     try:
+        app._update_progress(0.0, 1.0)
         app._update_status("Fetching all scenarios…")
         scores_cache = app._scores_cache
         min_entries_threshold = int(app._cfg.get("min_entries", MIN_ENTRIES))
         
+        app._update_progress(0.01, 1.0)
         all_scenarios = fetch_gzip_json_from_github("scenarios.json.gz", app)
+        app._update_progress(0.03, 1.0)
         ext_history = fetch_gzip_json_from_github("scenarios_history.json.gz", app)
+        app._update_progress(0.05, 1.0)
 
         if ext_history:
             h_ts, h_data = ext_history.get("timestamps", []), ext_history.get("history", {})
             if h_ts and h_data:
                 local_history = scores_cache.setdefault("entry_history", {})
                 merged_count = 0
-                for lid, counts in h_data.items():
+                total_items = len(h_data)
+                for idx, (lid, counts) in enumerate(h_data.items()):
                     lid_hist = local_history.setdefault(str(lid), {})
                     for i, count in enumerate(counts):
                         if count is not None and i < len(h_ts) and h_ts[i] not in lid_hist:
                             lid_hist[h_ts[i]] = count
                             merged_count += 1
+                    if idx % 1000 == 0:
+                        progress = 0.05 + 0.05 * (idx / total_items if total_items > 0 else 0)
+                        app._update_progress(progress, 1.0)
                 logger.info("Merged %d history points from GitHub", merged_count)
+
+        app._update_progress(0.10, 1.0)
 
         if not all_scenarios:
             app._update_status("Fetching scenarios (API fallback)…")
             total_est = get_estimated_fetch_count(min_entries_threshold) + get_estimated_matching_count(min_entries_threshold)
-            cb = lambda done, tot, msg: (app._update_status(msg), app._update_progress(min(0.95, done / total_est if total_est > 0 else 0), 1.0))
+            cb = lambda done, tot, msg: (app._update_status(msg), app._update_progress(0.01 + 0.09 * min(1.0, done / total_est if total_est > 0 else 0), 1.0))
             all_scenarios = fetch_all_scenarios(min_entries=min_entries_threshold, session=requests.Session(), progress_callback=cb)
             logger.info("API returned %d total scenarios", len(all_scenarios))
-        else:
-            app._update_progress(0.4, 1.0)
+            app._update_progress(0.10, 1.0)
 
         scores_cache["scenarios"] = all_scenarios
+        app._update_progress(0.12, 1.0)
         save_scores_cache(scores_cache)
+        app._update_progress(0.15, 1.0)
 
         master = [s for s in all_scenarios if int(s.get("counts", {}).get("entries", 0) or 0) >= min_entries_threshold]
         app._record_history_points(master)
+        app._update_progress(0.22, 1.0)
 
         scenario_info = {str(s.get("leaderboardId", "")): {
             "name": s.get("scenarioName", ""),
@@ -86,12 +98,15 @@ def run_fetch_all(app, username, password):
         
         app._jwt_token = None
         if password:
+            app._update_progress(0.22, 1.0)
             app._update_status("Logging in to KovaaKs…")
             try:
                 app._jwt_token = kovaaks_login(username, password)
+                app._update_progress(0.25, 1.0)
             except Exception as e:
                 logger.warning("Login failed, skipping score fetch: %s", e)
                 app._update_status("Login failed — showing scenario list only.")
+                app._update_progress(0.25, 1.0)
 
         scores_data = scores_cache.get("scores", {})
         user_by_lid = {k: v["user"] for k, v in scores_data.items() if k in scenario_info and "user" in v}
@@ -187,7 +202,7 @@ def run_fetch_all(app, username, password):
                 rem = (total_to_fetch - done) / rate if rate > 0 else 0
                 m, s = divmod(int(rem), 60)
                 app._update_status(f"Fetching scores… {done}/{total_to_fetch} ({cached_count} cached, {errors} errors) — ETA {f'{m}m{s:02d}s' if m else f'{s}s'}")
-                app._update_progress(min(1.0, 0.2 + 0.8 * (done / total_to_fetch)), 1.0)
+                app._update_progress(min(1.0, 0.25 + 0.75 * (done / total_to_fetch)), 1.0)
                 
             if done - last_refresh[0] >= 100:
                 last_refresh[0] = done
