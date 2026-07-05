@@ -15,7 +15,13 @@ let currentAutoHiddenColumns = [];
 function showLoginModal(username) {
     document.getElementById('login-username').value = username || '';
     document.getElementById('login-password').value = '';
-    document.getElementById('login-show-password').checked = false;
+    const loginToggleBtn = document.getElementById('login-show-password');
+    if (loginToggleBtn) {
+        const eyeShow = loginToggleBtn.querySelector('.eye-show');
+        const eyeHide = loginToggleBtn.querySelector('.eye-hide');
+        if (eyeShow) eyeShow.style.display = 'block';
+        if (eyeHide) eyeHide.style.display = 'none';
+    }
     document.getElementById('login-password').type = 'password';
     document.getElementById('login-modal').style.display = 'flex';
 }
@@ -138,10 +144,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Toggle for unhiding password in login prompt
     const loginShowPass = document.getElementById('login-show-password');
     if (loginShowPass) {
-        loginShowPass.addEventListener('change', function() {
+        loginShowPass.addEventListener('click', function() {
             const passInput = document.getElementById('login-password');
             if (passInput) {
-                passInput.type = this.checked ? 'text' : 'password';
+                const isPrivate = passInput.type === 'password';
+                passInput.type = isPrivate ? 'text' : 'password';
+                const eyeShow = this.querySelector('.eye-show');
+                const eyeHide = this.querySelector('.eye-hide');
+                if (eyeShow) eyeShow.style.display = isPrivate ? 'none' : 'block';
+                if (eyeHide) eyeHide.style.display = isPrivate ? 'block' : 'none';
             }
         });
     }
@@ -149,10 +160,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Toggle for unhiding password in settings
     const settingsShowPass = document.getElementById('settings-show-password');
     if (settingsShowPass) {
-        settingsShowPass.addEventListener('change', function() {
+        settingsShowPass.addEventListener('click', function() {
             const passInput = document.getElementById('settings-password');
             if (passInput) {
-                passInput.type = this.checked ? 'text' : 'password';
+                const isPrivate = passInput.type === 'password';
+                passInput.type = isPrivate ? 'text' : 'password';
+                const eyeShow = this.querySelector('.eye-show');
+                const eyeHide = this.querySelector('.eye-hide');
+                if (eyeShow) eyeShow.style.display = isPrivate ? 'none' : 'block';
+                if (eyeHide) eyeHide.style.display = isPrivate ? 'block' : 'none';
             }
         });
     }
@@ -163,7 +179,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const cfg = await window.pywebview.api.get_config();
             document.getElementById('settings-username').value = cfg.username || '';
             document.getElementById('settings-password').value = cfg.password || '';
-            document.getElementById('settings-show-password').checked = false;
+            const settingsToggleBtn = document.getElementById('settings-show-password');
+            if (settingsToggleBtn) {
+                const eyeShow = settingsToggleBtn.querySelector('.eye-show');
+                const eyeHide = settingsToggleBtn.querySelector('.eye-hide');
+                if (eyeShow) eyeShow.style.display = 'block';
+                if (eyeHide) eyeHide.style.display = 'none';
+            }
             document.getElementById('settings-password').type = 'password';
             document.getElementById('settings-stats-dir').value = cfg.stats_dir || '';
             document.getElementById('settings-min-entries').value = cfg.min_entries || 1000;
