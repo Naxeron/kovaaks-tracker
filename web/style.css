@@ -256,18 +256,42 @@ tr.selected td {
 }
 
 .progress-container {
-    height: 4px;
-    background-color: var(--surface-color);
+    height: 6px;
+    background-color: var(--border-color);
     margin-top: 5px;
-    border-radius: 2px;
+    border-radius: 3px;
     overflow: hidden;
+    position: relative;
 }
 
 .progress-bar {
     height: 100%;
-    background-color: #e83e8c;
+    background: linear-gradient(90deg, var(--primary-red) 0%, #ff6b8b 100%);
     width: 0%;
-    transition: width 0.3s ease;
+    transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 3px;
+    box-shadow: 0 0 8px rgba(242, 66, 93, 0.5);
+}
+
+.progress-bar.indeterminate {
+    width: 100% !important;
+    background: linear-gradient(90deg, 
+        rgba(242, 66, 93, 0.2) 0%, 
+        rgba(242, 66, 93, 1) 50%, 
+        rgba(242, 66, 93, 0.2) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite linear;
+    box-shadow: none;
+}
+
+@keyframes shimmer {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
 }
 
 .bottom-bar {
