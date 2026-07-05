@@ -21,3 +21,4 @@ __pycache__/
 .DS_Store
 Thumbs.db
 data/scores_cache.json.gz.tmp
+data/scores_cache.json.gz
