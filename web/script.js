@@ -12,6 +12,30 @@ let autoplayCurrentScenario = null;
 let initialFetchTriggered = false;
 let currentAutoHiddenColumns = [];
 
+function showLoginModal(username) {
+    document.getElementById('login-username').value = username || '';
+    document.getElementById('login-password').value = '';
+    document.getElementById('login-show-password').checked = false;
+    document.getElementById('login-password').type = 'password';
+    document.getElementById('login-modal').style.display = 'flex';
+}
+
+function playScenario(name) {
+    if (!name || !window.pywebview || !window.pywebview.api) return;
+    if (autoplayActive) {
+        autoplayCurrentScenario = name;
+        window.pywebview.api.update_status(`Autoplay: launching '${name}' — waiting for score…`);
+    }
+    window.pywebview.api.play_scenario(name);
+}
+
+function hideAllContextMenus() {
+    ['context-menu', 'column-context-menu', 'input-context-menu', 'log-context-menu'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+}
+
 function getColumnsToRender() {
     if (!currentData || !currentData.columns) return [];
     return currentData.columns.filter(c => {
@@ -59,37 +83,24 @@ let filters = {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Toggles
     document.querySelectorAll('.toggle-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const filter = e.currentTarget.dataset.filter;
-            if (btn.id === 'toggle-hidden') {
-                filters.hidden = !filters.hidden;
-                btn.classList.toggle('active');
+            filters[filter] = !filters[filter];
+            e.currentTarget.classList.toggle('active', filters[filter]);
+            if (filter === 'hidden') {
                 fetchData();
-                return;
             } else {
-                filters[filter] = !filters[filter];
-                if (filters[filter]) {
-                    e.currentTarget.classList.add('active');
-                } else {
-                    e.currentTarget.classList.remove('active');
-                }
+                renderTable();
             }
-            renderTable();
         });
     });
 
-    // Fetch button
     document.getElementById('btn-fetch').addEventListener('click', async () => {
         if (window.pywebview && window.pywebview.api) {
             const cfg = await window.pywebview.api.get_config();
             if (!cfg.username || !cfg.has_password) {
-                document.getElementById('login-username').value = cfg.username || '';
-                document.getElementById('login-password').value = '';
-                document.getElementById('login-show-password').checked = false;
-                document.getElementById('login-password').type = 'password';
-                document.getElementById('login-modal').style.display = 'flex';
+                showLoginModal(cfg.username);
                 return;
             }
             startFetch();
@@ -408,12 +419,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 columnContextMenu.appendChild(item);
             });
             
+            hideAllContextMenus();
             columnContextMenu.style.display = 'block';
             columnContextMenu.style.left = e.pageX + 'px';
             columnContextMenu.style.top = e.pageY + 'px';
-            
-            contextMenu.style.display = 'none';
-            if (logContextMenu) logContextMenu.style.display = 'none';
             return;
         }
 
@@ -426,13 +435,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const scenarioName = td.textContent.replace('▶', '').trim();
             contextMenuScenario = scenarioName;
             
+            hideAllContextMenus();
             contextMenu.style.display = 'block';
             contextMenu.style.left = e.pageX + 'px';
             contextMenu.style.top = e.pageY + 'px';
-            
-            columnContextMenu.style.display = 'none';
-            inputContextMenu.style.display = 'none';
-            if (logContextMenu) logContextMenu.style.display = 'none';
         }
     });
 
@@ -445,12 +451,7 @@ document.addEventListener('DOMContentLoaded', () => {
             e.preventDefault();
             activeInput = input;
             
-            // Hide other context menus
-            contextMenu.style.display = 'none';
-            columnContextMenu.style.display = 'none';
-            if (logContextMenu) logContextMenu.style.display = 'none';
-            
-            // Show input context menu
+            hideAllContextMenus();
             inputContextMenu.style.display = 'block';
             inputContextMenu.style.left = e.pageX + 'px';
             inputContextMenu.style.top = e.pageY + 'px';
@@ -458,18 +459,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.addEventListener('click', (e) => {
-        if (!contextMenu.contains(e.target)) {
-            contextMenu.style.display = 'none';
-        }
-        if (!columnContextMenu.contains(e.target)) {
-            columnContextMenu.style.display = 'none';
-        }
-        if (!inputContextMenu.contains(e.target)) {
-            inputContextMenu.style.display = 'none';
-        }
-        if (logContextMenu && !logContextMenu.contains(e.target)) {
-            logContextMenu.style.display = 'none';
-        }
+        [contextMenu, columnContextMenu, inputContextMenu, logContextMenu].forEach(menu => {
+            if (menu && !menu.contains(e.target)) {
+                menu.style.display = 'none';
+            }
+        });
     });
 
     document.getElementById('menu-input-copy').addEventListener('click', () => {
@@ -547,10 +541,7 @@ document.addEventListener('DOMContentLoaded', () => {
         logPanel.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             
-            // Hide other context menus
-            contextMenu.style.display = 'none';
-            columnContextMenu.style.display = 'none';
-            inputContextMenu.style.display = 'none';
+            hideAllContextMenus();
             
             // Enable/disable copy depending on whether there's selection
             const copyItem = document.getElementById('menu-log-copy');
@@ -602,13 +593,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     document.getElementById('menu-play-scenario').addEventListener('click', () => {
-        if (contextMenuScenario && window.pywebview && window.pywebview.api) {
-            if (autoplayActive) {
-                autoplayCurrentScenario = contextMenuScenario;
-                window.pywebview.api.update_status(`Autoplay: launching '${contextMenuScenario}' — waiting for score…`);
-            }
-            window.pywebview.api.play_scenario(contextMenuScenario);
-        }
+        playScenario(contextMenuScenario);
         contextMenu.style.display = 'none';
     });
 
@@ -631,14 +616,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('data-table').addEventListener('click', (e) => {
         const playBtn = e.target.closest('.play-btn-cell');
         if (playBtn) {
-            const scenario = playBtn.getAttribute('data-scenario');
-            if (scenario && window.pywebview && window.pywebview.api) {
-                if (autoplayActive) {
-                    autoplayCurrentScenario = scenario;
-                    window.pywebview.api.update_status(`Autoplay: launching '${scenario}' — waiting for score…`);
-                }
-                window.pywebview.api.play_scenario(scenario);
-            }
+            playScenario(playBtn.getAttribute('data-scenario'));
         }
     });
 
@@ -666,14 +644,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const tr = e.target.closest('tr');
         if (tr && tr.parentElement.tagName === 'TBODY') {
             const td = tr.firstElementChild;
-            const scenarioName = td.textContent.replace('▶', '').trim();
-            if (scenarioName && window.pywebview && window.pywebview.api) {
-                if (autoplayActive) {
-                    autoplayCurrentScenario = scenarioName;
-                    window.pywebview.api.update_status(`Autoplay: launching '${scenarioName}' — waiting for score…`);
-                }
-                window.pywebview.api.play_scenario(scenarioName);
-            }
+            playScenario(td.textContent.replace('▶', '').trim());
         }
     });
 
@@ -757,17 +728,10 @@ async function fetchData() {
             const showHidden = document.getElementById('toggle-hidden').classList.contains('active');
             currentData = await window.pywebview.api.get_data(cfg.min_entries || 1000, showHidden);
             window.zombies = new Set(currentData.zombies || []);
-            
             if (cfg.username && !initialFetchTriggered) {
                 initialFetchTriggered = true;
                 if (!cfg.has_password) {
-                    setTimeout(() => {
-                        document.getElementById('login-username').value = cfg.username;
-                        document.getElementById('login-password').value = '';
-                        document.getElementById('login-show-password').checked = false;
-                        document.getElementById('login-password').type = 'password';
-                        document.getElementById('login-modal').style.display = 'flex';
-                    }, 500);
+                    setTimeout(() => showLoginModal(cfg.username), 500);
                 } else {
                     startFetch();
                 }
@@ -840,14 +804,9 @@ function renderTable() {
         const isMeOnly = isPlayedByMe && !isPlayedByFriend;
         const isUnplayed = !isPlayedByMe && !isPlayedByFriend;
 
-        const anyFilterActive = filters.losing || filters.friends || filters.me || filters.unplayed;
-        if (anyFilterActive) {
-            let pass = false;
-            if (filters.losing && isLosing) pass = true;
-            if (filters.friends && isFriendsOnly) pass = true;
-            if (filters.me && isMeOnly) pass = true;
-            if (filters.unplayed && isUnplayed) pass = true;
-            if (!pass) return false;
+        if ((filters.losing || filters.friends || filters.me || filters.unplayed) &&
+            !(filters.losing && isLosing || filters.friends && isFriendsOnly || filters.me && isMeOnly || filters.unplayed && isUnplayed)) {
+            return false;
         }
 
         return true;
@@ -1153,11 +1112,7 @@ function autoplayAdvance() {
     autoplayCurrentScenario = nextScenario;
     
     selectRowByName(nextScenario);
-    
-    if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.update_status(`Autoplay: launching '${nextScenario}' — waiting for score…`);
-        window.pywebview.api.play_scenario(nextScenario);
-    }
+    playScenario(nextScenario);
 }
 
 function selectRowByName(name) {

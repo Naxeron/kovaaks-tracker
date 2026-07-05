@@ -13,16 +13,10 @@ def _trim_log_file(path, keep=2):
             content = f.read()
     except FileNotFoundError:
         return
-    marker = LAUNCH_MARKER
-    parts = content.split(marker)
-    # parts[0] is text before the first marker (possibly empty),
-    # parts[1..] each start right after a marker.
-    if len(parts) <= keep + 1:
-        return  # nothing to trim
-    # Keep only the last `keep` sections (plus the text after their markers)
-    trimmed = marker.join(parts[-(keep + 1):])
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(trimmed)
+    parts = content.split(LAUNCH_MARKER)
+    if len(parts) > keep + 1:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(LAUNCH_MARKER.join(parts[-(keep + 1):]))
 
 def is_debug_mode():
     """Check if the debug flag is set via command line arguments or environment variable."""

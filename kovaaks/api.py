@@ -308,9 +308,8 @@ def is_scenario_zombie(name, stats_dir, cached_zombies=None):
         # Check local Scenarios folder
         if os.path.exists(local_scenarios_dir):
             try:
-                for f in os.listdir(local_scenarios_dir):
-                    if f.endswith('.sce') and normalize(f[:-4]) == normalized_name:
-                        return False
+                if any(f.endswith('.sce') and normalize(f[:-4]) == normalized_name for f in os.listdir(local_scenarios_dir)):
+                    return False
             except OSError:
                 pass
 
@@ -319,10 +318,8 @@ def is_scenario_zombie(name, stats_dir, cached_zombies=None):
             try:
                 for sd in os.listdir(workshop_dir):
                     sd_path = os.path.join(workshop_dir, sd)
-                    if os.path.isdir(sd_path):
-                        for f in os.listdir(sd_path):
-                            if f.endswith('.sce') and normalize(f[:-4]) == normalized_name:
-                                return False
+                    if os.path.isdir(sd_path) and any(f.endswith('.sce') and normalize(f[:-4]) == normalized_name for f in os.listdir(sd_path)):
+                        return False
             except OSError:
                 pass
 

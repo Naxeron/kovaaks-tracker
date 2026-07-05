@@ -10,28 +10,27 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _make_row(scenario, my_rank="", best_friend="", rank_diff="", **extra):
+def _make_row(scenario, my_rank="", best_friend="", rank_diff=""):
     """Build a minimal row dict matching _rebuild_data output."""
-    row = {
+    return {
         "Scenario": scenario,
-        "Entry Count": extra.get("entry_count", "5000"),
+        "Entry Count": "5000",
         "My Rank": my_rank,
-        "My Score": extra.get("my_score", ""),
-        "Percentile": extra.get("percentile", ""),
-        "Score Date": extra.get("score_date", ""),
+        "My Score": "",
+        "Percentile": "",
+        "Score Date": "",
         "Top Friend": best_friend,
-        "Friend Rank": extra.get("friend_rank", ""),
-        "Friend Score": extra.get("friend_score", ""),
-        "Friend Percentile": extra.get("friend_percentile", ""),
-        "Friend Score Date": extra.get("friend_score_date", ""),
+        "Friend Rank": "",
+        "Friend Score": "",
+        "Friend Percentile": "",
+        "Friend Score Date": "",
         "Rank Diff": rank_diff,
-        "Pctile Diff": extra.get("pctile_diff", ""),
-        "Local Runs": extra.get("local_runs", "0"),
-        "Potential": extra.get("potential", ""),
-        "New Entries (24h)": extra.get("new_entries", "0"),
-        "Trend Mult": extra.get("trend_mult", "0.20x"),
+        "Pctile Diff": "",
+        "Local Runs": "0",
+        "Potential": "",
+        "New Entries (24h)": "0",
+        "Trend Mult": "0.20x",
     }
-    return row
 
 
 def _apply_filter_logic(all_rows, losing=False, friends_only=False,
