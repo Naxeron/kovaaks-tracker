@@ -144,13 +144,9 @@ if __name__ == "__main__":
         
         replace_latest = False
         if history_data["timestamps"]:
-            last_ts_str = history_data["timestamps"][-1]
             try:
-                # Handle potential Z suffix just in case
-                lk = last_ts_str.replace("Z", "+00:00") if "Z" in last_ts_str else last_ts_str
-                last_dt = datetime.datetime.fromisoformat(lk).replace(tzinfo=None)
-                if (now - last_dt).total_seconds() < 3600:
-                    replace_latest = True
+                last_dt = datetime.datetime.fromisoformat(history_data["timestamps"][-1].replace("Z", "+00:00")).replace(tzinfo=None)
+                replace_latest = (now - last_dt).total_seconds() < 3600
             except ValueError:
                 pass
 
@@ -171,8 +167,7 @@ if __name__ == "__main__":
 
         # Ensure all existing LIDs also get a value (None if not in current fetch)
         for lid, counts in current_history.items():
-            while len(counts) < len(history_data["timestamps"]):
-                counts.append(None)
+            counts.extend([None] * (len(history_data["timestamps"]) - len(counts)))
 
         # Prune to last 168 records (7 days if 1 point per hour)
         MAX_HISTORY = 168

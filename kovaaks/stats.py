@@ -12,6 +12,18 @@ import os
 logger = logging.getLogger("kovaaks")
 
 
+def _compute_trend_and_pb(scores):
+    trend, runs_since_pb = 1.0, 0
+    if len(scores) >= 2:
+        max_score = max(s[1] for s in scores)
+        runs_since_pb = len(scores) - 1 - max(i for i, s in enumerate(scores) if s[1] == max_score)
+        if runs_since_pb == len(scores) - 1:
+            runs_since_pb = 999
+        avg_change = (scores[-1][1] - scores[0][1]) / (len(scores) - 1)
+        if max_score > 1.0:
+            trend = max(0.5, min(2.0, 1.0 + (avg_change / max_score) * 5.0))
+    return trend, runs_since_pb
+
 def get_local_stats(stats_dir, cache_dict=None):
     """Extract local scenario stats (counts, recency, trends) from the Steam stats directory.
     
@@ -104,17 +116,7 @@ def get_local_stats(stats_dir, cache_dict=None):
                     scores.append((dt, score_val))
                     # Sort and keep 10 most recent
                     scores = sorted(scores, key=lambda x: x[0])[-10:]
-                    # Recalculate trend and runs since PB
-                    trend, runs_since_pb = 1.0, 0
-                    if len(scores) >= 2:
-                        max_score = max(s[1] for s in scores)
-                        runs_since_pb = len(scores) - 1 - max(i for i, s in enumerate(scores) if s[1] == max_score)
-                        if runs_since_pb == len(scores) - 1:
-                            runs_since_pb = 999
-                        avg_change = (scores[-1][1] - scores[0][1]) / (len(scores) - 1)
-                        if max_score > 1.0:
-                            trend = max(0.5, min(2.0, 1.0 + (avg_change / max_score) * 5.0))
-                    
+                    trend, runs_since_pb = _compute_trend_and_pb(scores)
                     entry["trend"] = trend
                     entry["runs_since_recent_pb"] = runs_since_pb
                     entry["recent_scores"] = [[s[0].isoformat(), s[1]] for s in scores]
@@ -168,15 +170,7 @@ def get_local_stats(stats_dir, cache_dict=None):
         # Calculate trends
         for data in stats.values():
             scores = sorted(data.pop("recent_scores"), key=lambda x: x[0])
-            trend, runs_since_pb = 1.0, 0
-            if len(scores) >= 2:
-                max_score = max(s[1] for s in scores)
-                runs_since_pb = len(scores) - 1 - max(i for i, s in enumerate(scores) if s[1] == max_score)
-                if runs_since_pb == len(scores) - 1:
-                    runs_since_pb = 999
-                avg_change = (scores[-1][1] - scores[0][1]) / (len(scores) - 1)
-                if max_score > 1.0:
-                    trend = max(0.5, min(2.0, 1.0 + (avg_change / max_score) * 5.0))
+            trend, runs_since_pb = _compute_trend_and_pb(scores)
             data["trend"] = trend
             data["runs_since_recent_pb"] = runs_since_pb
 
@@ -186,16 +180,13 @@ def get_local_stats(stats_dir, cache_dict=None):
     yesterday_str = yesterday.strftime("%Y.%m.%d")
 
     for fname in current_files:
-        if today_str in fname or yesterday_str in fname:
-            parts = fname[:-10].rsplit(" - ", 2)
-            if len(parts) >= 3:
-                sname, _, date_str = parts
-                try:
-                    dt = datetime.datetime.strptime(date_str, "%Y.%m.%d-%H.%M.%S")
-                    if (now_dt - dt).total_seconds() < 86400:
-                        if sname in stats:
-                            stats[sname]["runs_today"] += 1
-                except ValueError:
-                    pass
+        if (today_str in fname or yesterday_str in fname) and len(parts := fname[:-10].rsplit(" - ", 2)) >= 3:
+            sname, _, date_str = parts
+            try:
+                dt = datetime.datetime.strptime(date_str, "%Y.%m.%d-%H.%M.%S")
+                if (now_dt - dt).total_seconds() < 86400 and sname in stats:
+                    stats[sname]["runs_today"] += 1
+            except ValueError:
+                pass
 
     return stats

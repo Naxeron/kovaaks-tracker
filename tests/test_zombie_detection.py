@@ -17,12 +17,7 @@ def test_is_scenario_zombie_cached():
 @patch("os.listdir")
 def test_is_scenario_zombie_local_scenarios(mock_listdir, mock_exists):
     # Simulate scenario exists in local Saved/SaveGames/Scenarios folder
-    def exists_impl(path):
-        if "SaveGames/Scenarios" in path:
-            return True
-        return False
-
-    mock_exists.side_effect = exists_impl
+    mock_exists.side_effect = lambda path: "SaveGames/Scenarios" in path
     mock_listdir.return_value = ["1wall 6targets TE.sce", "Other.sce"]
 
     res = is_scenario_zombie("1wall 6targets TE", "/dummy/FPSAimTrainer/FPSAimTrainer/stats/", set())
@@ -33,23 +28,8 @@ def test_is_scenario_zombie_local_scenarios(mock_listdir, mock_exists):
 @patch("os.listdir")
 def test_is_scenario_zombie_workshop(mock_listdir, mock_exists):
     # Simulate scenario exists in Steam Workshop folder
-    def exists_impl(path):
-        if "workshop/content/824270" in path:
-            return True
-        if "workshop/content/824270/12345" in path:
-            return True
-        return False
-
-    mock_exists.side_effect = exists_impl
-
-    def listdir_impl(path):
-        if path.endswith("824270"):
-            return ["12345"]
-        if "12345" in path:
-            return ["Pasu Voltaic Easy.sce"]
-        return []
-
-    mock_listdir.side_effect = listdir_impl
+    mock_exists.side_effect = lambda path: "workshop/content/824270" in path
+    mock_listdir.side_effect = lambda path: ["12345"] if path.endswith("824270") else ["Pasu Voltaic Easy.sce"]
 
     res = is_scenario_zombie("Pasu Voltaic Easy", "/dummy/FPSAimTrainer/FPSAimTrainer/stats/", set())
     assert res is False

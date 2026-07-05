@@ -67,7 +67,7 @@ def test_update_status(mock_polling, mock_load_cache, mock_load_config):
     mock_window.evaluate_js.assert_called_with('if(window.setStatus) window.setStatus("Hello status")')
 
 
-@patch("kovaaks.cache.save_scores_cache")
+@patch("kovaaks_web.save_scores_cache")
 @patch("kovaaks_web.load_config")
 @patch("kovaaks_web.load_scores_cache")
 @patch("os.path.exists")
@@ -91,7 +91,7 @@ def test_start_stats_polling(mock_thread, mock_listdir, mock_exists, mock_load_c
     mock_save.assert_called()
 
 
-@patch("kovaaks.cache.save_scores_cache")
+@patch("kovaaks_web.save_scores_cache")
 @patch("kovaaks_web.load_config")
 @patch("kovaaks_web.load_scores_cache")
 @patch("os.path.exists")
@@ -161,7 +161,7 @@ def test_handle_new_stats_files(mock_sleep, mock_polling, mock_load_cache, mock_
 @patch("kovaaks.api.kovaaks_login")
 @patch("kovaaks.api.kovaaks_get_friends_scores")
 @patch("kovaaks.data_processing.parse_leaderboard_entries")
-@patch("kovaaks.cache.save_scores_cache")
+@patch("kovaaks_web.save_scores_cache")
 def test_handle_new_stats_files_with_fetch(
     mock_save_cache, mock_parse, mock_get_scores, mock_login, mock_sleep,
     mock_polling, mock_load_cache, mock_load_config
@@ -301,7 +301,7 @@ def test_autoplay_notification_fires_before_table_refresh(
     )
 
 
-@patch("kovaaks.cache.save_scores_cache")
+@patch("kovaaks_web.save_scores_cache")
 @patch("kovaaks_web.load_config")
 @patch("kovaaks_web.load_scores_cache")
 @patch("kovaaks_web.KovaaksAPI._start_stats_polling")
@@ -385,7 +385,7 @@ def test_play_scenario_bg_zombie_notifies_frontend(mock_load_cache, mock_load_co
     with patch("kovaaks.api.is_scenario_zombie", return_value=True), \
          patch("threading.Thread", SyncThread), \
          patch("webbrowser.open") as mock_webbrowser_open, \
-         patch("kovaaks.cache.save_scores_cache") as mock_save:
+         patch("kovaaks_web.save_scores_cache") as mock_save:
         res = api.play_scenario("Pasu Voltaic Easy")
         assert res is True
         mock_webbrowser_open.assert_called_once()

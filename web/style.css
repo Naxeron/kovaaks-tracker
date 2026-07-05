@@ -318,9 +318,6 @@ tr.selected td {
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--surface-color); border-left: 1px solid var(--border-color); }
 ::-webkit-scrollbar-thumb { background: #4a4a5a; border: 1px solid var(--surface-color); border-radius: 5px; }
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: var(--surface-color); border-left: 1px solid var(--border-color); }
-::-webkit-scrollbar-thumb { background: #4a4a5a; border: 1px solid var(--surface-color); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #6a6a7a; }
 
 .modal {

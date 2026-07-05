@@ -13,11 +13,10 @@ import threading
 import time
 import datetime
 import math
-from pathlib import Path
 
 from kovaaks.constants import MIN_ENTRIES
 from kovaaks.config_helpers import load_config
-from kovaaks.cache import load_scores_cache, load_scenarios_from_cache
+from kovaaks.cache import load_scores_cache, load_scenarios_from_cache, save_scores_cache
 from kovaaks.stats import get_local_stats as _get_local_stats
 from kovaaks.fetch_worker import run_fetch_all
 from kovaaks.data_processing import safe_int
@@ -25,6 +24,12 @@ from kovaaks.data_processing import safe_int
 from kovaaks.logging_helpers import setup_logging
 
 logger = setup_logging()
+
+def _parse_iso_dt(s):
+    ds = s.replace("Z", "+00:00")
+    if len(ds) <= 10:
+        ds += "T00:00:00"
+    return datetime.datetime.fromisoformat(ds).replace(tzinfo=None)
 
 class KovaaksAPI:
     def __init__(self):
@@ -64,7 +69,6 @@ class KovaaksAPI:
         
         # Save the updated scores cache in case get_local_stats added new local runs
         if self._scores_cache.pop("_dirty", False):
-            from kovaaks.cache import save_scores_cache
             save_scores_cache(self._scores_cache)
         
         self._cache_loaded_event.set()
@@ -90,7 +94,6 @@ class KovaaksAPI:
     def _update_status(self, msg):
         logger.info(msg)
         if self.window:
-            import json
             safe_msg = json.dumps(msg)
             self.window.evaluate_js(f"if(window.setStatus) window.setStatus({safe_msg})")
             
@@ -182,7 +185,6 @@ class KovaaksAPI:
         aim_type_avgs = {atype: sum(pcts) / len(pcts) for atype, pcts in aim_type_pcts.items()}
         all_pcts = [p for pcts in aim_type_pcts.values() for p in pcts]
         global_avg_pct = sum(all_pcts) / len(all_pcts) if all_pcts else 50.0
-        self._aim_type_avgs = aim_type_avgs
 
         stats_dir = self._get_stats_dir()
         # Use cached local stats unless marked dirty
@@ -193,9 +195,6 @@ class KovaaksAPI:
         now = datetime.datetime.now()
         entry_history = self._scores_cache.get("entry_history", {})
 
-        SCENARIO_BLACKLIST = {
-        }
-        
         show_hidden = self._filters.get("hidden").get() if "hidden" in self._filters else False
 
         import re
@@ -203,9 +202,6 @@ class KovaaksAPI:
 
         for lid, info in scenario_info.items():
             sname = info["name"]
-            if sname in SCENARIO_BLACKLIST:
-                continue
-
             norm_name = re_non_alnum.sub('', sname.lower())
             if hasattr(self, "_zombies") and norm_name in self._zombies:
                 continue
@@ -223,38 +219,24 @@ class KovaaksAPI:
             hist = entry_history.get(lid, {})
             popularity_trend = 0.0
             actual_new_entries = 0
-            if hist:
-                dates = sorted(hist.keys())
-                if len(dates) >= 2:
-                    try:
-                        d0_str = dates[0] if len(dates[0]) > 10 else dates[0] + "T00:00:00"
-                        d0_str = d0_str.replace("Z", "+00:00") if "Z" in d0_str else d0_str
-                        oldest = datetime.datetime.fromisoformat(d0_str).replace(tzinfo=None)
+            if hist and len(hist) >= 2:
+                try:
+                    dates = sorted(hist.keys())
+                    oldest = _parse_iso_dt(dates[0])
+                    newest = _parse_iso_dt(dates[-1])
+                    seconds_diff = (newest - oldest).total_seconds()
+                    if seconds_diff >= 1800:  # Need at least 30 minutes
+                        popularity_trend = (hist[dates[-1]] - hist[dates[0]]) / (seconds_diff / 86400.0)
                         
-                        d1_str = dates[-1] if len(dates[-1]) > 10 else dates[-1] + "T00:00:00"
-                        d1_str = d1_str.replace("Z", "+00:00") if "Z" in d1_str else d1_str
-                        newest = datetime.datetime.fromisoformat(d1_str).replace(tzinfo=None)
-                        
-                        seconds_diff = (newest - oldest).total_seconds()
-                        if seconds_diff >= 1800:  # Need at least 30 minutes
-                            # 1. Full history for stability in Trend Mult / Potential
-                            days_diff = seconds_diff / 86400.0
-                            entry_diff_total = hist[dates[-1]] - hist[dates[0]]
-                            popularity_trend = float(entry_diff_total) / days_diff
-                            
-                            # 2. 24h history for "New Entries (24h)" display
-                            target_24h = newest - datetime.timedelta(days=1)
-                            idx_24h = 0
-                            for i in range(len(dates) - 1, -1, -1):
-                                ds = dates[i].replace("Z", "+00:00") if "Z" in dates[i] else dates[i]
-                                if len(ds) <= 10: ds += "T00:00:00"
-                                dt = datetime.datetime.fromisoformat(ds).replace(tzinfo=None)
-                                if dt <= target_24h:
-                                    idx_24h = i
-                                    break
-                            actual_new_entries = hist[dates[-1]] - hist[dates[idx_24h]]
-                    except ValueError:
-                        pass
+                        target_24h = newest - datetime.timedelta(days=1)
+                        idx_24h = 0
+                        for i in range(len(dates) - 1, -1, -1):
+                            if _parse_iso_dt(dates[i]) <= target_24h:
+                                idx_24h = i
+                                break
+                        actual_new_entries = hist[dates[-1]] - hist[dates[idx_24h]]
+                except ValueError:
+                    pass
 
             competition_multiplier = max(0.2, math.log10(max(1.0, popularity_trend + 1.0)) / 2.0)
 
@@ -272,22 +254,18 @@ class KovaaksAPI:
 
             try:
                 e_val = int(info["entries"])
+                expected_pct = aim_type_avgs.get(info.get("aimType"), global_avg_pct)
+                expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
                 if has_user:
                     r_val = int(user_by_lid[lid]["rank"])
                     self._global_points_sum += (e_val - r_val)
                     self._global_potential_points_sum += (r_val - 1)
-                    
-                    expected_pct = aim_type_avgs.get(info.get("aimType"), global_avg_pct)
-                    expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
-                    if r_val > expected_rank:
-                        gain = r_val - expected_rank
+                    gain = r_val - expected_rank
+                    if gain > 0:
                         self._global_projected_gain_sum += gain
                         row["_projected_gain"] = gain
                 else:
                     self._global_potential_points_sum += (e_val - 1)
-                    
-                    expected_pct = aim_type_avgs.get(info.get("aimType"), global_avg_pct)
-                    expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
                     gain = e_val - expected_rank
                     self._global_projected_gain_sum += gain
                     row["_projected_gain"] = gain
@@ -429,42 +407,32 @@ class KovaaksAPI:
         now_str = now.isoformat()
         history = self._scores_cache.get("entry_history", {})
 
-        for lid in list(history.keys()):
-            bad_keys = []
-            for k in history[lid].keys():
+        for lid, points in history.items():
+            for k in list(points.keys()):
                 try:
-                    lk = k.replace("Z", "+00:00") if "Z" in k else k
-                    dt = datetime.datetime.fromisoformat(lk).replace(tzinfo=None)
-                    if (dt - now).total_seconds() > 3600:
-                        bad_keys.append(k)
+                    if (_parse_iso_dt(k) - now).total_seconds() > 3600:
+                        del points[k]
                 except ValueError:
                     pass
-            for k in bad_keys:
-                del history[lid][k]
 
         for s in scenarios_list:
             lid = str(s.get("leaderboardId", ""))
-            entries = s.get("counts", {}).get("entries", 0)
             try:
-                entries = int(entries)
+                entries = int(s.get("counts", {}).get("entries", 0))
             except (ValueError, TypeError):
                 continue
-            if lid not in history:
-                history[lid] = {}
-            if history[lid]:
-                latest_key = max(history[lid].keys())
+            lid_history = history.setdefault(lid, {})
+            if lid_history:
+                latest_key = max(lid_history.keys())
                 try:
-                    lk = latest_key.replace("Z", "+00:00") if "Z" in latest_key else latest_key
-                    latest_dt = datetime.datetime.fromisoformat(lk).replace(tzinfo=None)
-                    if (now - latest_dt).total_seconds() < 3600:
-                        history[lid][latest_key] = entries
+                    if (now - _parse_iso_dt(latest_key)).total_seconds() < 3600:
+                        lid_history[latest_key] = entries
                         continue
                 except ValueError:
                     pass
-            history[lid][now_str] = entries
-            while len(history[lid]) > 168:
-                oldest_key = min(history[lid].keys())
-                del history[lid][oldest_key]
+            lid_history[now_str] = entries
+            while len(lid_history) > 168:
+                del lid_history[min(lid_history.keys())]
         self._scores_cache["entry_history"] = history
 
     def get_data(self, min_entries, show_hidden=False):
@@ -552,12 +520,7 @@ class KovaaksAPI:
 
     def toggle_hide_scenario(self, scenario_name):
         from kovaaks.config_helpers import save_config
-        lid = None
-        for k, v in self._scenario_info.items():
-            if v["name"] == scenario_name:
-                lid = k
-                break
-                
+        lid = next((k for k, v in self._scenario_info.items() if v["name"] == scenario_name), None)
         if not lid:
             return False
 
@@ -599,13 +562,10 @@ class KovaaksAPI:
             stats_dir = self._get_stats_dir()
             if os.path.exists(stats_dir):
                 try:
-                    for f in os.listdir(stats_dir):
-                        if f.endswith(" Stats.csv"):
-                            self._known_stat_files.add(f)
+                    self._known_stat_files.update(f for f in os.listdir(stats_dir) if f.endswith(" Stats.csv"))
                 except OSError:
                     pass
             self._scores_cache["known_stat_files"] = list(self._known_stat_files)
-            from kovaaks.cache import save_scores_cache
             save_scores_cache(self._scores_cache)
             self._local_stats_dirty = True
 
@@ -700,7 +660,6 @@ class KovaaksAPI:
         import webbrowser
         from kovaaks.constants import STEAM_LAUNCH_URI
         from kovaaks.api import is_scenario_zombie
-        from kovaaks.cache import save_scores_cache
 
         if not hasattr(self, "_zombies"):
             self._zombies = set(self._scores_cache.setdefault("zombies", []))
@@ -766,7 +725,6 @@ class KovaaksAPI:
                 
                 self._known_stat_files = current_files
                 self._scores_cache["known_stat_files"] = list(self._known_stat_files)
-                from kovaaks.cache import save_scores_cache
                 save_scores_cache(self._scores_cache)
                 
                 if new_files:
@@ -804,7 +762,6 @@ class KovaaksAPI:
                     api_ref._scores_cache["known_stat_files"] = list(api_ref._known_stat_files)
                     
                     # Save cache in the background to avoid blocking the file event handler thread
-                    from kovaaks.cache import save_scores_cache
                     threading.Thread(
                         target=save_scores_cache,
                         args=(api_ref._scores_cache,),
@@ -863,7 +820,6 @@ class KovaaksAPI:
                     self._scores_cache["known_stat_files"] = list(self._known_stat_files)
                     
                     # Save cache in the background to avoid blocking the polling thread
-                    from kovaaks.cache import save_scores_cache
                     threading.Thread(
                         target=save_scores_cache,
                         args=(self._scores_cache,),
@@ -964,7 +920,6 @@ class KovaaksAPI:
         import requests
         from kovaaks.api import kovaaks_get_friends_scores
         from kovaaks.data_processing import parse_leaderboard_entries
-        from kovaaks.cache import save_scores_cache
 
         session = requests.Session()
         for lid, expected_score in lids_to_update.items():
