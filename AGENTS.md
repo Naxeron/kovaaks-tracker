@@ -18,3 +18,5 @@ Implement or update automated tests for features, business logic, bugs.
 * Keep main GUI thread responsive. Run network requests, API queries, file parsing in background or daemon threads.
 * Wrap background operations in `try-finally`. Prevent threads hanging or failing silently.
 * Update UI state (status/progress bars, labels) on all execution paths.
+* Avoid importing/instantiating heavy GUI toolkits (e.g. `tkinter`) for headless-friendly utilities like clipboard access. Prefer platform-specific native commands (`pbpaste`, `xclip`, `xsel`) or Windows APIs (`ctypes`) first, falling back to Tkinter only as a final backup.
+* Under `pywebview`, threads can evaluate JS directly via `window.evaluate_js` without custom GUI thread-marshalling wrappers. Do not introduce redundant GUI-thread dispatching helpers.
