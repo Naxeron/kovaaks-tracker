@@ -394,11 +394,19 @@ class KovaaksAPI:
 
 
 
-    def _rebuild_data_and_finish(self, errors=0):
+    def _rebuild_data_and_finish(self, errors=0, silent=False):
         self._update_status(f"Fetch complete with {errors} errors.")
         self._update_progress(1.0, 1.0)
         if self.window:
-            self.window.evaluate_js("fetchData()")
+            import json
+            self.window.evaluate_js(f"fetchData({json.dumps(silent)})")
+
+    def _rebuild_data_and_cancelled(self, silent=False):
+        self._update_status("Fetch cancelled.")
+        self._update_progress(0.0, 1.0)
+        if self.window:
+            import json
+            self.window.evaluate_js(f"fetchData({json.dumps(silent)})")
 
     def _record_history_points(self, scenarios_list):
         now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
@@ -547,7 +555,7 @@ class KovaaksAPI:
             "min_entries": self._cfg.get("min_entries", 1000),
             "auto_refresh": self._cfg.get("auto_refresh", False),
             "auto_refresh_github_only": self._cfg.get("auto_refresh_github_only", False),
-            "refresh_interval": self._cfg.get("refresh_interval", 60),
+            "refresh_interval": self._cfg.get("refresh_interval", 2),
             "always_show_total_points": self._cfg.get("always_show_total_points", True),
             "auto_fit_columns": self._cfg.get("auto_fit_columns", False),
             "visible_columns": self._cfg.get("visible_columns", None),
@@ -654,10 +662,26 @@ class KovaaksAPI:
             logger.warning("Could not read clipboard from python: %s", e)
             return ""
 
-    def fetch_all_stats(self):
+    def fetch_all_stats(self, silent=False):
+        if getattr(self, "_fetch_in_progress", False):
+            logger.info("Fetch already in progress, skipping.")
+            return False
+        self._fetch_in_progress = True
+        self._fetch_cancelled = False
         username = self._cfg.get("username", "")
         password = self._cfg.get("password", "")
-        threading.Thread(target=run_fetch_all, args=(self, username, password), daemon=True).start()
+        threading.Thread(target=run_fetch_all, args=(self, username, password, silent), daemon=True).start()
+        return True
+
+    def is_fetch_in_progress(self):
+        return getattr(self, "_fetch_in_progress", False)
+
+    def cancel_fetch(self):
+        if getattr(self, "_fetch_in_progress", False):
+            self._fetch_cancelled = True
+            logger.info("Cancellation requested for the current fetch.")
+            return True
+        return False
 
     def play_scenario(self, name):
         import urllib.parse

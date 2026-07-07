@@ -76,6 +76,16 @@ body {
 .autoplay-btn { background-color: var(--orange); }
 .fetch-btn { background-color: var(--primary-red); }
 .settings-btn { background-color: var(--primary-red); padding: 6px 10px;}
+.stop-fetch-btn {
+    background-color: transparent;
+    border: 1px solid var(--primary-red);
+    color: var(--primary-red);
+    transition: background-color 0.2s, color 0.2s;
+}
+.stop-fetch-btn:hover {
+    background-color: var(--primary-red);
+    color: white;
+}
 
 .main-content {
     display: flex;

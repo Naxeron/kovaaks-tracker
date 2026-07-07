@@ -21,6 +21,9 @@
                 <button id="btn-fetch" class="action-btn fetch-btn">
                     <span class="icon">↻</span> Refresh
                 </button>
+                <button id="btn-stop-fetch" class="action-btn stop-fetch-btn" style="display: none;">
+                    <span class="icon">■</span> Stop
+                </button>
                 <button id="btn-settings" class="action-btn settings-btn">
                     <span class="icon">⚙</span>
                 </button>
@@ -162,8 +165,8 @@
                     <label for="settings-auto-refresh-github">Wait for scenario data update</label>
                 </div>
                 <div class="form-group">
-                    <label>Refresh Interval (min)</label>
-                    <input type="number" id="settings-refresh-interval">
+                    <label>Refresh Interval (hours)</label>
+                    <input type="number" id="settings-refresh-interval" min="1">
                 </div>
                 <div class="form-group checkbox-group">
                     <input type="checkbox" id="settings-always-show-total-points">

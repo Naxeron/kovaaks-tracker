@@ -114,6 +114,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    const btnStopFetch = document.getElementById('btn-stop-fetch');
+    if (btnStopFetch) {
+        btnStopFetch.addEventListener('click', async () => {
+            if (window.pywebview && window.pywebview.api) {
+                await window.pywebview.api.cancel_fetch();
+                setStatus("Stopping fetch...");
+            }
+        });
+    }
+
     document.getElementById('btn-login-cancel').addEventListener('click', () => {
         document.getElementById('login-modal').style.display = 'none';
     });
@@ -192,7 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('settings-min-entries').value = cfg.min_entries || 1000;
             document.getElementById('settings-auto-refresh').checked = cfg.auto_refresh || false;
             document.getElementById('settings-auto-refresh-github').checked = cfg.auto_refresh_github_only || false;
-            document.getElementById('settings-refresh-interval').value = cfg.refresh_interval || 60;
+            document.getElementById('settings-refresh-interval').value = cfg.refresh_interval || 2;
             document.getElementById('settings-always-show-total-points').checked = cfg.always_show_total_points !== false;
             document.getElementById('settings-auto-fit-columns').checked = cfg.auto_fit_columns || false;
             document.getElementById('settings-modal').style.display = 'flex';
@@ -211,7 +221,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const min_entries = document.getElementById('settings-min-entries').value;
             const auto_refresh = document.getElementById('settings-auto-refresh').checked;
             const auto_refresh_github_only = document.getElementById('settings-auto-refresh-github').checked;
-            const refresh_interval = document.getElementById('settings-refresh-interval').value;
+            const refresh_interval = Math.max(1, parseInt(document.getElementById('settings-refresh-interval').value) || 2);
             const always_show_total_points = document.getElementById('settings-always-show-total-points').checked;
             const auto_fit_columns = document.getElementById('settings-auto-fit-columns').checked;
 
@@ -721,25 +731,35 @@ function setupAutoRefresh(cfg) {
         autoRefreshTimer = null;
     }
     if (cfg.auto_refresh) {
-        const interval = parseInt(cfg.refresh_interval) || 60;
+        const interval = Math.max(1, parseInt(cfg.refresh_interval) || 2);
         autoRefreshTimer = setInterval(() => {
-            startFetch();
-        }, interval * 60 * 1000);
+            startFetch(true);
+        }, interval * 60 * 60 * 1000);
     }
 }
 
-async function startFetch() {
-    setLoading(true, "Fetching stats from Steam...");
+async function startFetch(silent = false) {
+    if (!silent) {
+        setLoading(true, "Fetching stats from Steam...");
+    }
+    const btnFetch = document.getElementById('btn-fetch');
+    const btnStopFetch = document.getElementById('btn-stop-fetch');
+    if (btnFetch) btnFetch.style.display = 'none';
+    if (btnStopFetch) btnStopFetch.style.display = 'flex';
     try {
-        await window.pywebview.api.fetch_all_stats();
+        await window.pywebview.api.fetch_all_stats(silent);
     } catch (err) {
         console.error(err);
         setStatus("Error fetching stats.");
+        if (btnFetch) btnFetch.style.display = 'flex';
+        if (btnStopFetch) btnStopFetch.style.display = 'none';
     }
 }
 
-async function fetchData() {
-    setLoading(true, "Loading data...");
+async function fetchData(silent = false) {
+    if (!silent) {
+        setLoading(true, "Loading data...");
+    }
     if (window.pywebview && window.pywebview.api) {
         try {
             const cfg = await window.pywebview.api.get_config();
@@ -747,6 +767,17 @@ async function fetchData() {
             setupAutoRefresh(cfg);
             visibleColumns = cfg.visible_columns;
             columnWidths = cfg.column_widths || {};
+
+            const isFetching = await window.pywebview.api.is_fetch_in_progress();
+            const btnFetch = document.getElementById('btn-fetch');
+            const btnStopFetch = document.getElementById('btn-stop-fetch');
+            if (isFetching) {
+                if (btnFetch) btnFetch.style.display = 'none';
+                if (btnStopFetch) btnStopFetch.style.display = 'flex';
+            } else {
+                if (btnFetch) btnFetch.style.display = 'flex';
+                if (btnStopFetch) btnStopFetch.style.display = 'none';
+            }
 
             const showHidden = document.getElementById('toggle-hidden').classList.contains('active');
             currentData = await window.pywebview.api.get_data(cfg.min_entries || 1000, showHidden);
@@ -778,7 +809,9 @@ async function fetchData() {
         };
         renderTable();
     }
-    setLoading(false);
+    if (!silent) {
+        setLoading(false);
+    }
 }
 
 function getFilteredAndSortedRows(includeZombies) {
