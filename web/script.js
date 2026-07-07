@@ -85,7 +85,8 @@ let filters = {
     friends: false,
     me: false,
     unplayed: false,
-    hidden: false
+    hidden: false,
+    zombies: false
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -812,6 +813,12 @@ function renderTable() {
         if (searchTerm) {
             const matchesSearch = row.some(cell => String(cell).toLowerCase().includes(searchTerm));
             if (!matchesSearch) return false;
+        }
+
+        const scenarioName = row[colIndex["Scenario"]];
+        const isZombie = window.zombies && window.zombies.has(scenarioName);
+        if (!filters.zombies && isZombie) {
+            return false;
         }
         
         const myRank = row[colIndex["My Rank"]];
