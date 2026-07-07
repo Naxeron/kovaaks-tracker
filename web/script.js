@@ -781,35 +781,14 @@ async function fetchData() {
     setLoading(false);
 }
 
-function renderTable() {
-    const table = document.getElementById('data-table');
-    const thead = table.querySelector('thead tr');
-    const tbody = table.querySelector('tbody');
-    
-    thead.innerHTML = '';
-    tbody.innerHTML = '';
-    renderedRowsCount = 0;
-    if (window.resetScrollInterpolation) window.resetScrollInterpolation();
-
-    if (!currentData.columns || currentData.columns.length === 0) return;
-
-    if (sortCol === -1) {
-        const entryIndex = currentData.columns.indexOf("Entry Count");
-        if (entryIndex !== -1) {
-            sortCol = entryIndex;
-            sortAsc = false;
-        }
-    }
-
-    // 1. Filter and sort rows first
-    filteredRows = [...currentData.rows];
-    
+function getFilteredAndSortedRows(includeZombies) {
+    if (!currentData || !currentData.rows) return [];
+    let rows = [...currentData.rows];
     const searchTerm = document.getElementById('search-input').value.toLowerCase();
-
     const colIndex = {};
     currentData.columns.forEach((c, i) => colIndex[c] = i);
 
-    filteredRows = filteredRows.filter(row => {
+    rows = rows.filter(row => {
         if (searchTerm) {
             const matchesSearch = row.some(cell => String(cell).toLowerCase().includes(searchTerm));
             if (!matchesSearch) return false;
@@ -817,7 +796,7 @@ function renderTable() {
 
         const scenarioName = row[colIndex["Scenario"]];
         const isZombie = window.zombies && window.zombies.has(scenarioName);
-        if (!filters.zombies && isZombie) {
+        if (!includeZombies && !filters.zombies && isZombie) {
             return false;
         }
         
@@ -842,7 +821,7 @@ function renderTable() {
     });
 
     if (sortCol !== -1) {
-        filteredRows.sort((a, b) => {
+        rows.sort((a, b) => {
             let valA = a[sortCol];
             let valB = b[sortCol];
             
@@ -860,6 +839,34 @@ function renderTable() {
             return 0;
         });
     }
+    return rows;
+}
+
+function renderTable() {
+    const table = document.getElementById('data-table');
+    const thead = table.querySelector('thead tr');
+    const tbody = table.querySelector('tbody');
+    
+    thead.innerHTML = '';
+    tbody.innerHTML = '';
+    renderedRowsCount = 0;
+    if (window.resetScrollInterpolation) window.resetScrollInterpolation();
+
+    if (!currentData.columns || currentData.columns.length === 0) return;
+
+    if (sortCol === -1) {
+        const entryIndex = currentData.columns.indexOf("Entry Count");
+        if (entryIndex !== -1) {
+            sortCol = entryIndex;
+            sortAsc = false;
+        }
+    }
+
+    // 1. Filter and sort rows first
+    filteredRows = getFilteredAndSortedRows(false);
+    
+    const colIndex = {};
+    currentData.columns.forEach((c, i) => colIndex[c] = i);
 
     // 2. Compute currentAutoHiddenColumns
     currentAutoHiddenColumns = [];
@@ -1103,10 +1110,24 @@ function autoplayAdvance() {
     const scenarioCol = colIndex["Scenario"];
     
     let currentIdx = -1;
-    for (let i = 0; i < filteredRows.length; i++) {
-        if (filteredRows[i][scenarioCol] === autoplayCurrentScenario) {
+    let listToSearch = filteredRows;
+    for (let i = 0; i < listToSearch.length; i++) {
+        if (listToSearch[i][scenarioCol] === autoplayCurrentScenario) {
             currentIdx = i;
             break;
+        }
+    }
+    
+    if (currentIdx === -1) {
+        // If the scenario was a zombie, it might have been filtered out of filteredRows.
+        // We temporarily get rows including zombies to locate where it was in the order.
+        const tempRows = getFilteredAndSortedRows(true);
+        for (let i = 0; i < tempRows.length; i++) {
+            if (tempRows[i][scenarioCol] === autoplayCurrentScenario) {
+                currentIdx = i;
+                listToSearch = tempRows;
+                break;
+            }
         }
     }
     
@@ -1118,15 +1139,15 @@ function autoplayAdvance() {
     }
     
     let nextIdx = currentIdx + 1;
-    while (nextIdx < filteredRows.length) {
-        const nextScenario = filteredRows[nextIdx][scenarioCol];
+    while (nextIdx < listToSearch.length) {
+        const nextScenario = listToSearch[nextIdx][scenarioCol];
         if (window.zombies && window.zombies.has(nextScenario)) {
             nextIdx++;
         } else {
             break;
         }
     }
-    if (nextIdx >= filteredRows.length) {
+    if (nextIdx >= listToSearch.length) {
         autoplayActive = false;
         const btn = document.getElementById('btn-autoplay');
         btn.classList.remove('active');
@@ -1137,7 +1158,7 @@ function autoplayAdvance() {
         return;
     }
     
-    const nextScenario = filteredRows[nextIdx][scenarioCol];
+    const nextScenario = listToSearch[nextIdx][scenarioCol];
     autoplayCurrentScenario = nextScenario;
     
     selectRowByName(nextScenario);
