@@ -82,7 +82,6 @@ function applyColumnWidths() {
 
 let filters = {
     losing: false,
-    friends: false,
     me: false,
     unplayed: false,
     hidden: false,
@@ -841,12 +840,11 @@ function getFilteredAndSortedRows(includeZombies) {
         const rankDiff = parseInt(row[colIndex["Rank Diff"]]);
 
         const isLosing = isPlayedByMe && isPlayedByFriend && !isNaN(rankDiff) && rankDiff > 0;
-        const isFriendsOnly = isPlayedByFriend && !isPlayedByMe;
-        const isMeOnly = isPlayedByMe && !isPlayedByFriend;
-        const isUnplayed = !isPlayedByMe && !isPlayedByFriend;
+        const isMeOnly = isPlayedByMe;
+        const isUnplayed = !isPlayedByMe;
 
-        if ((filters.losing || filters.friends || filters.me || filters.unplayed) &&
-            !(filters.losing && isLosing || filters.friends && isFriendsOnly || filters.me && isMeOnly || filters.unplayed && isUnplayed)) {
+        if ((filters.losing || filters.me || filters.unplayed) &&
+            !(filters.losing && isLosing || filters.me && isMeOnly || filters.unplayed && isUnplayed)) {
             return false;
         }
 
