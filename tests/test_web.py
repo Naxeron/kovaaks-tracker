@@ -396,6 +396,42 @@ def test_play_scenario_bg_zombie_notifies_frontend(mock_load_cache, mock_load_co
         assert any("fetchData" in call for call in calls)
 
 
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+def test_zombie_scenarios_included_in_rebuild_data(mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {
+        "scenarios": [
+            {
+                "leaderboardId": "lid-zombie",
+                "scenarioName": "Zombie Scenario",
+                "counts": {"entries": 1500},
+                "scenario": {"aimType": "Tracking"}
+            },
+            {
+                "leaderboardId": "lid-normal",
+                "scenarioName": "Normal Scenario",
+                "counts": {"entries": 1200},
+                "scenario": {"aimType": "Tracking"}
+            }
+        ],
+        "scores": {},
+        "entry_history": {},
+        "zombies": ["zombiescenario"]
+    }
+
+    api = KovaaksAPI()
+    
+    data = api.get_data(min_entries=1000, show_hidden=False)
+    
+    assert "zombies" in data
+    assert "Zombie Scenario" in data["zombies"]
+    
+    row_names = [r[0] for r in data["rows"]]
+    assert "Zombie Scenario" in row_names
+    assert "Normal Scenario" in row_names
+
+
 def test_log_panel_ui_elements():
     # Verify index.html contains log-context-menu and its items
     html_path = os.path.join(

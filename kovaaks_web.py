@@ -203,9 +203,7 @@ class KovaaksAPI:
         for lid, info in scenario_info.items():
             sname = info["name"]
             norm_name = re_non_alnum.sub('', sname.lower())
-            if hasattr(self, "_zombies") and norm_name in self._zombies:
-                continue
-                
+            
             is_hidden = lid in self._hidden_scenarios
             if show_hidden and not is_hidden:
                 continue
