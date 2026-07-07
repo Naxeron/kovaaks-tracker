@@ -34,12 +34,20 @@ def _make_row(scenario, my_rank="", best_friend="", rank_diff=""):
 
 
 def _apply_filter_logic(all_rows, losing=False, friends_only=False,
-                        me_only=False, unplayed=False, query=""):
+                        me_only=False, unplayed=False, query="",
+                        zombies=False, zombie_names=None):
     """Replicate the filter logic from KovaaksApp._apply_filter without GUI.
 
     Uses set-based accumulation: each active toggle adds matching row indices
     to a set, then we take the union. This allows multiple filters to stack.
     """
+    if zombie_names is None:
+        zombie_names = set()
+
+    # Filter out zombies if the 'zombies' toggle is not active (default behavior)
+    if not zombies:
+        all_rows = [r for r in all_rows if r.get("Scenario") not in zombie_names]
+
     if losing or friends_only or me_only or unplayed:
         matched = set()
         for idx, r in enumerate(all_rows):
@@ -180,6 +188,26 @@ class TestFilterLogic:
         result = _apply_filter_logic(rows, me_only=True, unplayed=True)
         scenarios = [r["Scenario"] for r in result]
         assert scenarios == ["ScenD", "ScenE", "ScenF"]
+
+    def test_zombies_hidden_by_default(self):
+        """Zombies should be hidden by default (zombies=False)."""
+        rows = self._build_dataset()
+        # Mark ScenA and ScenB as zombies
+        zombie_names = {"ScenA", "ScenB"}
+        result = _apply_filter_logic(rows, zombies=False, zombie_names=zombie_names)
+        # ScenA and ScenB should be filtered out
+        scenarios = [r["Scenario"] for r in result]
+        assert "ScenA" not in scenarios
+        assert "ScenB" not in scenarios
+        assert len(result) == 4
+
+    def test_zombies_shown_when_toggle_active(self):
+        """Zombies should be shown when the toggle is active (zombies=True)."""
+        rows = self._build_dataset()
+        zombie_names = {"ScenA", "ScenB"}
+        result = _apply_filter_logic(rows, zombies=True, zombie_names=zombie_names)
+        # All rows should still be shown
+        assert len(result) == 6
 
 
 
