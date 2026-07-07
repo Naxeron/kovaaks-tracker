@@ -63,13 +63,13 @@ function applyColumnWidths() {
     if (!currentData || !currentData.columns) return;
     
     if (window.currentConfig && window.currentConfig.auto_fit_columns) {
-        styleTag.textContent = '';
+        styleTag.textContent = '#data-table { width: 100% !important; }';
         return;
     }
     
     const columnsToRender = getColumnsToRender();
     
-    let css = '';
+    let css = '#data-table { width: max-content !important; min-width: 100% !important; }\n';
     columnsToRender.forEach((col, index) => {
         if (columnWidths[col]) {
             const nth = index + 1;
