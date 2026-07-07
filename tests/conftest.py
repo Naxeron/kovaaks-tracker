@@ -133,7 +133,7 @@ def sample_config():
         "stats_dir": "/fake/stats",
         "min_entries": "1000",
         "auto_refresh": False,
-        "refresh_interval": "60",
+        "refresh_interval": "2",
         "always_show_total_points": True,
         "visible_columns": ["Entry Count", "My Rank", "My Score"],
     }

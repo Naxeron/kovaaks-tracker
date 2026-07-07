@@ -568,3 +568,107 @@ def test_login_modal_enter_and_password_toggle():
     assert "Enter" in js_content
 
 
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+def test_fetch_all_stats_prevents_overlapping_fetches(mock_polling, mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    
+    # Simulate fetch already in progress
+    api._fetch_in_progress = True
+    
+    # Try calling fetch_all_stats
+    with patch("threading.Thread") as mock_thread:
+        res = api.fetch_all_stats(silent=True)
+        assert res is False
+        mock_thread.assert_not_called()
+
+    # Reset in progress
+    api._fetch_in_progress = False
+    with patch("threading.Thread") as mock_thread:
+        res = api.fetch_all_stats(silent=True)
+        assert res is True
+        mock_thread.assert_called_once()
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+def test_rebuild_data_and_finish_passes_silent(mock_polling, mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    mock_window = MagicMock()
+    api.set_window(mock_window)
+    
+    api._rebuild_data_and_finish(errors=0, silent=True)
+    mock_window.evaluate_js.assert_called_with("fetchData(true)")
+    
+    mock_window.reset_mock()
+    api._rebuild_data_and_finish(errors=0, silent=False)
+    mock_window.evaluate_js.assert_called_with("fetchData(false)")
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+def test_is_fetch_in_progress_and_cancel_fetch(mock_polling, mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    assert api.is_fetch_in_progress() is False
+    
+    api._fetch_in_progress = True
+    assert api.is_fetch_in_progress() is True
+    
+    # Cancel fetch when in progress should return True
+    assert api.cancel_fetch() is True
+    assert api._fetch_cancelled is True
+    
+    # Cancel fetch when not in progress should return False
+    api._fetch_in_progress = False
+    assert api.cancel_fetch() is False
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+def test_fetch_all_stats_sets_progress_flag_synchronously(mock_polling, mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    assert api.is_fetch_in_progress() is False
+    
+    with patch("threading.Thread") as mock_thread:
+        res = api.fetch_all_stats(silent=True)
+        assert res is True
+        assert api.is_fetch_in_progress() is True
+        mock_thread.assert_called_once()
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+def test_rebuild_data_and_cancelled_passes_silent(mock_polling, mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    mock_window = MagicMock()
+    api.set_window(mock_window)
+    
+    api._rebuild_data_and_cancelled(silent=True)
+    mock_window.evaluate_js.assert_called_with("fetchData(true)")
+    
+    mock_window.reset_mock()
+    api._rebuild_data_and_cancelled(silent=False)
+    mock_window.evaluate_js.assert_called_with("fetchData(false)")
+
+
+

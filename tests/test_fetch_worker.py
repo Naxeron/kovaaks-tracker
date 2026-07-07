@@ -77,8 +77,34 @@ class TestFetchWorkerWorkItems:
         assert "lid-1" in captured_work_items
         assert "lid-2" in captured_work_items
         assert "lid-3" in captured_work_items
-        assert "lid-4" not in captured_work_items
-        assert "lid-5" not in captured_work_items
+        assert "lid-4" in captured_work_items
+        assert "lid-5" in captured_work_items
         
         # "newly_played_scenarios" should have been popped/removed from scores_cache
         assert "newly_played_scenarios" not in app._scores_cache
+
+    @patch("kovaaks.fetch_worker.fetch_gzip_json_from_github")
+    @patch("kovaaks.fetch_worker.kovaaks_login")
+    @patch("concurrent.futures.ThreadPoolExecutor")
+    def test_run_fetch_all_respects_cancellation(self, mock_executor, mock_login, mock_github):
+        app = MagicMock()
+        app._cfg = {"min_entries": 10}
+        app._scores_cache = {
+            "scenarios": [],
+            "entry_history": {},
+            "scores": {}
+        }
+        
+        # Set cancellation flag to True
+        app._fetch_cancelled = True
+        
+        # Run fetch
+        run_fetch_all(app, "test_user", "test_pass")
+        
+        # Verify early return: github, login, and executor should NOT be called/created
+        mock_github.assert_not_called()
+        mock_login.assert_not_called()
+        mock_executor.assert_not_called()
+        
+        # Verify the cancellation handler was called on app
+        app._rebuild_data_and_cancelled.assert_called_once()

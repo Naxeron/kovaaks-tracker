@@ -40,9 +40,14 @@ def fetch_gzip_json_from_github(filename, app):
     return None
 
 
-def run_fetch_all(app, username, password):
+def run_fetch_all(app, username, password, silent=False):
     """Background worker that fetches all scenarios and updates the GUI state."""
+    app._fetch_in_progress = True
     try:
+        if getattr(app, "_fetch_cancelled", False) is True:
+            app._rebuild_data_and_cancelled(silent=silent)
+            return
+
         app._update_progress(0.0, 1.0)
         app._update_status("Fetching all scenarios…")
         scores_cache = app._scores_cache
@@ -50,6 +55,10 @@ def run_fetch_all(app, username, password):
         
         app._update_progress(0.01, 1.0)
         all_scenarios = fetch_gzip_json_from_github("scenarios.json.gz", app)
+        if getattr(app, "_fetch_cancelled", False) is True:
+            app._rebuild_data_and_cancelled(silent=silent)
+            return
+
         app._update_progress(0.03, 1.0)
         ext_history = fetch_gzip_json_from_github("scenarios_history.json.gz", app)
         app._update_progress(0.05, 1.0)
@@ -74,13 +83,29 @@ def run_fetch_all(app, username, password):
         app._update_progress(0.10, 1.0)
 
         if not all_scenarios:
+            if getattr(app, "_fetch_cancelled", False) is True:
+                app._rebuild_data_and_cancelled(silent=silent)
+                return
             app._update_status("Fetching scenarios (API fallback)…")
             total_est = get_estimated_fetch_count(min_entries_threshold) + get_estimated_matching_count(min_entries_threshold)
-            cb = lambda done, tot, msg: (app._update_status(msg), app._update_progress(0.01 + 0.09 * min(1.0, done / total_est if total_est > 0 else 0), 1.0))
-            all_scenarios = fetch_all_scenarios(min_entries=min_entries_threshold, session=requests.Session(), progress_callback=cb)
+            def cb(done, tot, msg):
+                if getattr(app, "_fetch_cancelled", False) is True:
+                    raise RuntimeError("Fetch cancelled")
+                app._update_status(msg)
+                app._update_progress(0.01 + 0.09 * min(1.0, done / total_est if total_est > 0 else 0), 1.0)
+            try:
+                all_scenarios = fetch_all_scenarios(min_entries=min_entries_threshold, session=requests.Session(), progress_callback=cb)
+            except RuntimeError as re:
+                if str(re) == "Fetch cancelled":
+                    app._rebuild_data_and_cancelled(silent=silent)
+                    return
+                raise
             logger.info("API returned %d total scenarios", len(all_scenarios))
             app._update_progress(0.10, 1.0)
 
+        if getattr(app, "_fetch_cancelled", False) is True:
+            app._rebuild_data_and_cancelled(silent=silent)
+            return
         scores_cache["scenarios"] = all_scenarios
         app._update_progress(0.12, 1.0)
         save_scores_cache(scores_cache)
@@ -96,14 +121,24 @@ def run_fetch_all(app, username, password):
         } for s in master}
         app._scenario_info = scenario_info
         
+        if getattr(app, "_fetch_cancelled", False) is True:
+            app._rebuild_data_and_cancelled(silent=silent)
+            return
+
         app._jwt_token = None
         if password:
             app._update_progress(0.22, 1.0)
             app._update_status("Logging in to KovaaKs…")
             try:
                 app._jwt_token = kovaaks_login(username, password)
+                if getattr(app, "_fetch_cancelled", False) is True:
+                    app._rebuild_data_and_cancelled(silent=silent)
+                    return
                 app._update_progress(0.25, 1.0)
             except Exception as e:
+                if getattr(app, "_fetch_cancelled", False) is True:
+                    app._rebuild_data_and_cancelled(silent=silent)
+                    return
                 logger.warning("Login failed, skipping score fetch: %s", e)
                 app._update_status("Login failed — showing scenario list only.")
                 app._update_progress(0.25, 1.0)
@@ -127,21 +162,17 @@ def run_fetch_all(app, username, password):
         
         local_stats_cache = scores_cache.get("local_stats", {})
         
-        work_items = []
-        for lid in all_lids:
-            sname = scenario_info[lid]["name"]
-            is_newly_played = lid in newly_played_lids
-            has_local_runs = sname in local_stats_cache and local_stats_cache[sname].get("count", 0) > 0
-            has_cached_user_score = lid in scores_data and "user" in scores_data[lid]
-            
-            if (lid not in scores_data) or is_newly_played or (has_local_runs and not has_cached_user_score):
-                work_items.append(lid)
+        work_items = all_lids
 
         total_to_fetch = len(work_items)
         cached_count = len(all_lids) - total_to_fetch
 
         if total_to_fetch == 0:
-            app._rebuild_data_and_finish()
+            app._rebuild_data_and_finish(silent=silent)
+            return
+
+        if getattr(app, "_fetch_cancelled", False) is True:
+            app._rebuild_data_and_cancelled(silent=silent)
             return
 
         app._update_status(f"Fetching scores for {total_to_fetch} scenarios ({cached_count} cached)…")
@@ -161,18 +192,22 @@ def run_fetch_all(app, username, password):
 
         def _fetch_one(lid, session):
             nonlocal errors, completed, session_expired
-            if session_expired:
+            if session_expired or getattr(app, "_fetch_cancelled", False) is True:
                 return
 
             try:
                 data = kovaaks_get_friends_scores(app._jwt_token, lid, session=session)
             except requests.exceptions.HTTPError as e:
+                if getattr(app, "_fetch_cancelled", False) is True:
+                    return
                 if e.response is not None and e.response.status_code == 401:
                     session_expired = True
                     return
                 with lock: errors += 1
                 return
             except Exception:
+                if getattr(app, "_fetch_cancelled", False) is True:
+                    return
                 with lock: errors += 1
                 return
 
@@ -212,6 +247,11 @@ def run_fetch_all(app, username, password):
         with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
             executor.map(lambda lid: _fetch_one(lid, session), work_items)
 
+        if getattr(app, "_fetch_cancelled", False) is True:
+            with lock: _save_cache()
+            app._rebuild_data_and_cancelled(silent=silent)
+            return
+
         if session_expired:
             with lock: _save_cache()
             app._update_status("Session expired — progress saved. Try again.")
@@ -219,11 +259,12 @@ def run_fetch_all(app, username, password):
             return
 
         with lock: _save_cache()
-        app._rebuild_data_and_finish(errors)
+        app._rebuild_data_and_finish(errors, silent=silent)
 
     except Exception as e:
         logger.exception("Error in fetch thread")
         app._update_status(f"Error: {e}")
     finally:
-        pass
+        app._fetch_in_progress = False
+        app._fetch_cancelled = False
 
