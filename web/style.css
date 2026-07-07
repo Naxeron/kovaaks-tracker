@@ -149,8 +149,6 @@ body {
 }
 #toggle-losing { border-color: var(--yellow); color: var(--yellow); }
 #toggle-losing.active { background-color: rgba(251, 191, 36, 0.2); }
-#toggle-friends { border-color: var(--blue); color: var(--blue); }
-#toggle-friends.active { background-color: rgba(59, 130, 246, 0.2); }
 #toggle-me { border-color: var(--yellow); color: var(--yellow); }
 #toggle-me.active { background-color: rgba(251, 191, 36, 0.2); }
 #toggle-unplayed { border-color: var(--primary-red); color: var(--primary-red); }

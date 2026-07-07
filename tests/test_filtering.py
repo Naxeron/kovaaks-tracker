@@ -33,7 +33,7 @@ def _make_row(scenario, my_rank="", best_friend="", rank_diff=""):
     }
 
 
-def _apply_filter_logic(all_rows, losing=False, friends_only=False,
+def _apply_filter_logic(all_rows, losing=False,
                         me_only=False, unplayed=False, query="",
                         zombies=False, zombie_names=None):
     """Replicate the filter logic from KovaaksApp._apply_filter without GUI.
@@ -48,7 +48,7 @@ def _apply_filter_logic(all_rows, losing=False, friends_only=False,
     if not zombies:
         all_rows = [r for r in all_rows if r.get("Scenario") not in zombie_names]
 
-    if losing or friends_only or me_only or unplayed:
+    if losing or me_only or unplayed:
         matched = set()
         for idx, r in enumerate(all_rows):
             has_rank = r.get("My Rank", "") != ""
@@ -61,11 +61,9 @@ def _apply_filter_logic(all_rows, losing=False, friends_only=False,
                         matched.add(idx)
                 except (ValueError, TypeError):
                     pass
-            if friends_only and has_friend and not has_rank:
+            if me_only and has_rank:
                 matched.add(idx)
-            if me_only and has_rank and not has_friend:
-                matched.add(idx)
-            if unplayed and not has_rank and not has_friend:
+            if unplayed and not has_rank:
                 matched.add(idx)
         all_rows = [all_rows[i] for i in sorted(matched)]
 
@@ -105,24 +103,19 @@ class TestFilterLogic:
         assert len(result) == 1
         assert result[0]["Scenario"] == "ScenA"
 
-    def test_friends_only_filter(self):
-        rows = self._build_dataset()
-        result = _apply_filter_logic(rows, friends_only=True)
-        assert len(result) == 1
-        assert result[0]["Scenario"] == "ScenC"
-
     def test_me_only_filter(self):
         rows = self._build_dataset()
         result = _apply_filter_logic(rows, me_only=True)
-        assert len(result) == 1
-        assert result[0]["Scenario"] == "ScenD"
+        assert len(result) == 3
+        names = {r["Scenario"] for r in result}
+        assert names == {"ScenA", "ScenB", "ScenD"}
 
     def test_unplayed_filter(self):
         rows = self._build_dataset()
         result = _apply_filter_logic(rows, unplayed=True)
-        assert len(result) == 2
+        assert len(result) == 3
         names = {r["Scenario"] for r in result}
-        assert names == {"ScenE", "ScenF"}
+        assert names == {"ScenC", "ScenE", "ScenF"}
 
     def test_text_filter(self):
         rows = self._build_dataset()
@@ -159,35 +152,21 @@ class TestFilterLogic:
         """Multiple toggle filters should return the UNION of matches."""
         rows = self._build_dataset()
         result = _apply_filter_logic(rows, me_only=True, unplayed=True)
-        assert len(result) == 3
-        names = {r["Scenario"] for r in result}
-        assert names == {"ScenD", "ScenE", "ScenF"}
+        assert len(result) == 6
 
     def test_all_toggles_active(self):
         """All toggles active should return the union of all categories."""
         rows = self._build_dataset()
-        result = _apply_filter_logic(rows, losing=True, friends_only=True,
+        result = _apply_filter_logic(rows, losing=True,
                                      me_only=True, unplayed=True)
-        # ScenA (losing), ScenC (friends_only), ScenD (me_only), ScenE+F (unplayed)
-        # ScenB is winning so not matched by any toggle
-        assert len(result) == 5
-        excluded = {r["Scenario"] for r in result}
-        assert "ScenB" not in excluded
-
-    def test_losing_and_friends_only(self):
-        """Losing + Friends Only should return union."""
-        rows = self._build_dataset()
-        result = _apply_filter_logic(rows, losing=True, friends_only=True)
-        assert len(result) == 2
-        names = {r["Scenario"] for r in result}
-        assert names == {"ScenA", "ScenC"}
+        assert len(result) == 6
 
     def test_order_preserved(self):
         """Results should maintain original row order."""
         rows = self._build_dataset()
         result = _apply_filter_logic(rows, me_only=True, unplayed=True)
         scenarios = [r["Scenario"] for r in result]
-        assert scenarios == ["ScenD", "ScenE", "ScenF"]
+        assert scenarios == ["ScenA", "ScenB", "ScenC", "ScenD", "ScenE", "ScenF"]
 
     def test_zombies_hidden_by_default(self):
         """Zombies should be hidden by default (zombies=False)."""
