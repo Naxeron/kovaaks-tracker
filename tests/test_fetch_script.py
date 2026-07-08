@@ -81,6 +81,31 @@ class TestScriptFetchAll:
 
         result = script_fetch_all(pages_limit=1, entries_limit=100)
         assert len(result) == 2
+        assert mock_count.call_count == 0
+
+    @patch("scripts.fetch_scenarios.get_accurate_entry_count")
+    @patch("scripts.fetch_scenarios.api_request_with_retry")
+    @patch("scripts.fetch_scenarios.time.sleep")
+    def test_fetches_accurate_count_when_missing(self, mock_sleep, mock_req, mock_count):
+        page_data = {
+            "data": [
+                {"leaderboardId": "lid-1", "scenarioName": "No Counts"},
+                {"leaderboardId": "lid-2", "counts": {}},
+            ],
+            "total": 2,
+        }
+        resp = MagicMock()
+        resp.json.return_value = page_data
+        resp.status_code = 200
+        mock_req.return_value = resp
+
+        mock_count.return_value = 1234
+
+        result = script_fetch_all(pages_limit=1, entries_limit=100)
+        assert len(result) == 2
+        assert mock_count.call_count == 2
+        assert result[0]["counts"]["entries"] == 1234
+        assert result[1]["counts"]["entries"] == 1234
 
     @patch("scripts.fetch_scenarios.get_accurate_entry_count")
     @patch("scripts.fetch_scenarios.api_request_with_retry")
