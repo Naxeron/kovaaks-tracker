@@ -215,12 +215,26 @@ def run_fetch_all(app, username, password, silent=False):
                 return
 
             user_entry, friend_entries = parse_leaderboard_entries(data, username)
+
+            # Fetch accurate entry count if there is a user score or friend score
+            accurate_entries = None
+            if user_entry or friend_entries:
+                from kovaaks.api import get_accurate_entry_count
+                try:
+                    accurate_entries = get_accurate_entry_count(lid, session=session)
+                except Exception as e:
+                    logger.debug("Failed to fetch accurate count during fetch for lid=%s: %s", lid, e)
+
             with lock:
                 cache_entry = {}
                 if user_entry:
                     user_by_lid[lid] = cache_entry["user"] = user_entry
                 if friend_entries:
                     friends_by_lid[lid] = cache_entry["friends"] = friend_entries
+                if accurate_entries is not None:
+                    cache_entry["entries"] = accurate_entries
+                    if lid in app._scenario_info:
+                        app._scenario_info[lid]["entries"] = accurate_entries
                 scores_data[lid] = cache_entry
                 completed += 1
                 done = completed

@@ -2,7 +2,7 @@ name: Fetch Scenarios
 
 on:
   schedule:
-    - cron: '0/5 * * * *' # Every 5 minutes
+    - cron: '0 */12 * * *' # Every 12 hours
   workflow_dispatch: # Manual trigger
 
 permissions:
