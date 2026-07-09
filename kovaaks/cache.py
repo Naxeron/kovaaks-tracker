@@ -37,7 +37,6 @@ def save_scores_cache(cache_dict):
     with _cache_lock:
         tmp_cache = SCORES_CACHE + ".tmp"
         try:
-            os.makedirs(os.path.dirname(SCORES_CACHE), exist_ok=True)
             with gzip.open(tmp_cache, "wt", encoding="utf-8") as f:
                 json.dump(cache_dict, f, separators=(",", ":"))
             os.replace(tmp_cache, SCORES_CACHE)

@@ -57,7 +57,6 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100):
             future_to_item = {
                 executor.submit(get_accurate_entry_count, it.get("leaderboardId"), session): it
                 for it in items
-                if not (it.get("counts") and it["counts"].get("entries") is not None)
             }
             for future in concurrent.futures.as_completed(future_to_item):
                 item = future_to_item[future]
@@ -124,7 +123,6 @@ if __name__ == "__main__":
         # Sort by entries count descending
         merged_list.sort(key=lambda x: int(x.get("counts", {}).get("entries", 0)), reverse=True)
 
-        os.makedirs(os.path.dirname(SCENARIOS_JSON), exist_ok=True)
         with gzip.open(SCENARIOS_JSON, "wt", encoding="utf-8") as f:
             json.dump(merged_list, f, separators=(",", ":"))
         
