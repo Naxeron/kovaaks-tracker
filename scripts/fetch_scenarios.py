@@ -22,7 +22,7 @@ SCENARIOS_JSON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__
 SCENARIOS_HISTORY_JSON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "scenarios_history.json.gz")
 
 
-def fetch_all_scenarios(pages_limit=0, entries_limit=100, existing_scenarios=None):
+def fetch_all_scenarios(pages_limit=0, entries_limit=100):
     url = "https://kovaaks.com/webapp-backend/scenario/popular"
     all_data = []
     page = 0
@@ -54,39 +54,18 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100, existing_scenarios=Non
                 break
 
             # Fetch accurate entry counts in parallel for the current page
-            future_to_item = {}
-            for it in items:
-                lid = it.get("leaderboardId")
-                if not lid:
-                    continue
-                if "counts" not in it:
-                    it["counts"] = {}
-                popular_count = it["counts"].get("entries")
-                
-                if popular_count is None:
-                    future_to_item[executor.submit(get_accurate_entry_count, lid, session)] = it
-                    continue
-                
-                # Keep popular count
-                it["counts"]["popular_entries"] = popular_count
-                
-                # Only fetch accurate count if popular_count >= entries_limit
-                if popular_count < entries_limit:
-                    continue
-                
-                # Check if we can reuse the cached accurate count
-                if (existing_scenarios and lid in existing_scenarios and 
-                    existing_scenarios[lid].get("counts", {}).get("popular_entries") == popular_count):
-                    it["counts"]["entries"] = existing_scenarios[lid]["counts"].get("entries", popular_count)
-                else:
-                    future_to_item[executor.submit(get_accurate_entry_count, lid, session)] = it
-
-            if future_to_item:
-                for future in concurrent.futures.as_completed(future_to_item):
-                    item = future_to_item[future]
-                    accurate_count = future.result()
-                    if accurate_count is not None:
-                        item["counts"]["entries"] = accurate_count
+            future_to_item = {
+                executor.submit(get_accurate_entry_count, it.get("leaderboardId"), session): it
+                for it in items
+                if not (it.get("counts") and it["counts"].get("entries") is not None)
+            }
+            for future in concurrent.futures.as_completed(future_to_item):
+                item = future_to_item[future]
+                accurate_count = future.result()
+                if accurate_count is not None:
+                    if "counts" not in item:
+                        item["counts"] = {}
+                    item["counts"]["entries"] = accurate_count
 
             all_data.extend(items)
             
@@ -131,11 +110,7 @@ if __name__ == "__main__":
                 logger.warning(f"Could not load existing scenarios: {e}")
 
         # Fetch new scenarios
-        new_scenarios_list = fetch_all_scenarios(
-            pages_limit=args.pages,
-            entries_limit=args.min_entries,
-            existing_scenarios=existing_scenarios
-        )
+        new_scenarios_list = fetch_all_scenarios(pages_limit=args.pages, entries_limit=args.min_entries)
         
         # Merge new into existing (new overwrites old for same leaderboardId)
         for s in new_scenarios_list:

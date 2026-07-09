@@ -149,8 +149,6 @@ class KovaaksAPI:
                     user_by_lid[lid] = cached["user"]
                 if "friends" in cached and cached["friends"]:
                     friends_by_lid[lid] = cached["friends"]
-                if "entries" in cached:
-                    scenario_info[lid]["entries"] = cached["entries"]
 
         self._scenario_info = scenario_info
         self._user_by_lid = user_by_lid
@@ -927,14 +925,6 @@ class KovaaksAPI:
                                 pass
                             
                     if target_met or attempt == max_attempts - 1:
-                        # Fetch accurate count
-                        from kovaaks.api import get_accurate_entry_count
-                        accurate_entries = None
-                        try:
-                            accurate_entries = get_accurate_entry_count(lid, session=session)
-                        except Exception as e:
-                            logger.debug("Failed to fetch accurate count during stats files update for lid=%s: %s", lid, e)
-
                         if user_entry:
                             self._user_by_lid[lid] = user_entry
                             updated = True
@@ -949,10 +939,6 @@ class KovaaksAPI:
                             self._scores_cache["scores"][lid]["user"] = user_entry
                         if friend_entries:
                             self._scores_cache["scores"][lid]["friends"] = friend_entries
-                        if accurate_entries is not None:
-                            self._scores_cache["scores"][lid]["entries"] = accurate_entries
-                            if lid in self._scenario_info:
-                                self._scenario_info[lid]["entries"] = accurate_entries
                             
                         break
                     else:
