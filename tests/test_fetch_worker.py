@@ -108,3 +108,50 @@ class TestFetchWorkerWorkItems:
         
         # Verify the cancellation handler was called on app
         app._rebuild_data_and_cancelled.assert_called_once()
+
+
+class TestFetchWorkerAccurateCount:
+    @patch("kovaaks.fetch_worker.fetch_gzip_json_from_github")
+    @patch("kovaaks.fetch_worker.kovaaks_login")
+    @patch("kovaaks.fetch_worker.kovaaks_get_friends_scores")
+    @patch("kovaaks.api.get_accurate_entry_count")
+    @patch("kovaaks.fetch_worker.save_scores_cache")
+    def test_fetch_one_queries_accurate_count(self, mock_save, mock_get_acc, mock_get_friends, mock_login, mock_github):
+        app = MagicMock()
+        app._cfg = {"min_entries": 10}
+        app._scores_cache = {
+            "scenarios": [],
+            "entry_history": {},
+            "scores": {},
+            "local_stats": {}
+        }
+        app._scenario_info = {"lid-1": {"name": "Scen 1", "entries": 100}}
+        
+        # Return scenarios list from github mock
+        mock_github.side_effect = [
+            [
+                {"leaderboardId": "lid-1", "scenarioName": "Scen 1", "counts": {"entries": 100}},
+            ],
+            None
+        ]
+        
+        # Mock login to succeed
+        mock_login.return_value = "fake-jwt-token"
+        
+        # Mock friends scores to return user score
+        mock_get_friends.return_value = [{"webappUsername": "test_user", "rank": 5, "score": 100}]
+        
+        # Mock accurate count to return 50
+        mock_get_acc.return_value = 50
+        
+        # Run fetch
+        run_fetch_all(app, "test_user", "test_pass")
+        
+        # Verify get_accurate_entry_count was called
+        assert mock_get_acc.call_count == 1
+        args, kwargs = mock_get_acc.call_args
+        assert args[0] == "lid-1"
+        
+        # Verify entries was updated in scenario_info and scores cache
+        assert app._scenario_info["lid-1"]["entries"] == 50
+        assert app._scores_cache["scores"]["lid-1"]["entries"] == 50
