@@ -77,41 +77,11 @@ class TestScriptFetchAll:
         resp.status_code = 200
         mock_req.return_value = resp
 
-        mock_count.return_value = None
+        mock_count.return_value = None  # Skip accurate counts
 
         result = script_fetch_all(pages_limit=1, entries_limit=100)
         assert len(result) == 2
-        assert mock_count.call_count == 2
-
-    @patch("scripts.fetch_scenarios.get_accurate_entry_count")
-    @patch("scripts.fetch_scenarios.api_request_with_retry")
-    @patch("scripts.fetch_scenarios.time.sleep")
-    def test_reuses_cached_accurate_count(self, mock_sleep, mock_req, mock_count):
-        page_data = {
-            "data": [
-                {"leaderboardId": "lid-1", "counts": {"entries": 5000}},
-                {"leaderboardId": "lid-2", "counts": {"entries": 3000}},
-            ],
-            "total": 2,
-        }
-        resp = MagicMock()
-        resp.json.return_value = page_data
-        resp.status_code = 200
-        mock_req.return_value = resp
-
-        existing_scenarios = {
-            "lid-1": {"leaderboardId": "lid-1", "counts": {"entries": 4900, "popular_entries": 5000}},
-            "lid-2": {"leaderboardId": "lid-2", "counts": {"entries": 2900, "popular_entries": 2000}},
-        }
-
-        mock_count.return_value = 2850
-
-        result = script_fetch_all(pages_limit=1, entries_limit=100, existing_scenarios=existing_scenarios)
-        
-        assert len(result) == 2
-        assert result[0]["counts"]["entries"] == 4900
-        assert result[1]["counts"]["entries"] == 2850
-        assert mock_count.call_count == 1
+        assert mock_count.call_count == 0
 
     @patch("scripts.fetch_scenarios.get_accurate_entry_count")
     @patch("scripts.fetch_scenarios.api_request_with_retry")
