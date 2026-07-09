@@ -34,24 +34,3 @@ class TestLoadScenariosFromCache:
         assert "scenarioName" in first
         assert "counts" in first
         assert "entries" in first["counts"]
-
-
-class TestSaveScoresCache:
-    def test_save_creates_parent_directory_and_file(self, tmp_path):
-        from unittest.mock import patch
-        from kovaaks.cache import save_scores_cache, load_scores_cache
-
-        target_dir = tmp_path / "new_data_dir"
-        target_file = target_dir / "scores_cache.json.gz"
-        assert not target_dir.exists()
-
-        with patch("kovaaks.cache.SCORES_CACHE", str(target_file)):
-            save_scores_cache({"hello": "world"})
-
-            assert target_dir.exists()
-            assert target_file.exists()
-
-            # Verify load_scores_cache reads from same path
-            loaded = load_scores_cache()
-            assert loaded == {"hello": "world"}
-

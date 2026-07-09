@@ -20,11 +20,16 @@ from kovaaks.cache import load_scores_cache, load_scenarios_from_cache, save_sco
 from kovaaks.stats import get_local_stats as _get_local_stats
 from kovaaks.fetch_worker import run_fetch_all
 from kovaaks.data_processing import safe_int
-from kovaaks.scoring import parse_iso_dt as _parse_iso_dt, parse_popularity_metrics, calculate_potential_score
 
 from kovaaks.logging_helpers import setup_logging
 
 logger = setup_logging()
+
+def _parse_iso_dt(s):
+    ds = s.replace("Z", "+00:00")
+    if len(ds) <= 10:
+        ds += "T00:00:00"
+    return datetime.datetime.fromisoformat(ds).replace(tzinfo=None)
 
 class KovaaksAPI:
     def __init__(self):
@@ -210,7 +215,26 @@ class KovaaksAPI:
             lstats = local_stats.get(sname, {"count": 0, "last_played": None, "trend": 1.0})
 
             hist = entry_history.get(lid, {})
-            popularity_trend, actual_new_entries = parse_popularity_metrics(hist)
+            popularity_trend = 0.0
+            actual_new_entries = 0
+            if hist and len(hist) >= 2:
+                try:
+                    dates = sorted(hist.keys())
+                    oldest = _parse_iso_dt(dates[0])
+                    newest = _parse_iso_dt(dates[-1])
+                    seconds_diff = (newest - oldest).total_seconds()
+                    if seconds_diff >= 1800:  # Need at least 30 minutes
+                        popularity_trend = (hist[dates[-1]] - hist[dates[0]]) / (seconds_diff / 86400.0)
+                        
+                        target_24h = newest - datetime.timedelta(days=1)
+                        idx_24h = 0
+                        for i in range(len(dates) - 1, -1, -1):
+                            if _parse_iso_dt(dates[i]) <= target_24h:
+                                idx_24h = i
+                                break
+                        actual_new_entries = hist[dates[-1]] - hist[dates[idx_24h]]
+                except ValueError:
+                    pass
 
             competition_multiplier = max(0.2, math.log10(max(1.0, popularity_trend + 1.0)) / 2.0)
 
@@ -274,10 +298,38 @@ class KovaaksAPI:
                         row["Percentile"] = f"{pct:.2f}%"
 
                         # Calculate Potential Score (Optimized Algorithm)
-                        potential = calculate_potential_score(
-                            rank, entries, lstats, now, competition_multiplier
-                        )
-                        row["Potential"] = str(potential)
+                        # 1. Logarithmic Potential — neutralizes population bias
+                        skill_gap = 1.0 - pct / 100.0
+                        log_weight = math.log10(max(rank, 10))
+                        base_potential = log_weight * skill_gap
+
+                        # 2. Spaced Repetition (Time Factor) — Ebbinghaus curve
+                        if lstats.get("last_played"):
+                            days_ago = (now - lstats["last_played"]).total_seconds() / 86400.0
+                            time_factor = 0.8 + 0.7 * (1.0 - math.exp(-max(0, days_ago) / 14.0))
+                        else:
+                            time_factor = 1.5  # Maximum priority for unplayed benchmarks
+
+                        # 3. Session Fatigue — decoupled from PB tracking (fixes min() bug)
+                        runs_today = lstats.get("runs_today", 0)
+                        fatigue_factor = math.exp(-runs_today / 12.0)
+
+                        # 4. Variance-Modulated Plateau Penalty (Sigmoid Decay)
+                        pb_ago = lstats.get("runs_since_recent_pb", 0)
+                        trend = lstats.get("trend", 1.0)
+                        if trend <= 1.02:
+                            # Sigmoid: max 85% penalty, inflection at 20 runs
+                            plateau_penalty = 1.0 - (0.85 / (1.0 + math.exp(-0.4 * (pb_ago - 20.0))))
+                        else:
+                            plateau_penalty = 1.0
+
+                        # 5. Active Learning Bonus — clamped trend factor
+                        trend_factor = max(0.8, min(trend, 1.3))
+
+                        # 6. Final Potential — *1000 converts small log floats to readable ints
+                        potential = (base_potential * 1000) * time_factor * fatigue_factor * plateau_penalty * trend_factor * competition_multiplier
+                        row["Potential"] = f"{int(potential)}"
+                        # (Removed global summation of formula-based potential)
 
                     except (ValueError, TypeError, ZeroDivisionError):
                         row["Percentile"] = ""
