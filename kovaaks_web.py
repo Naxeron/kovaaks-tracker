@@ -720,12 +720,27 @@ class KovaaksAPI:
         def check_zombie_bg():
             try:
                 is_zombie = is_scenario_zombie(name, stats_dir, self._zombies)
+                
+                if not is_zombie:
+                    from kovaaks.api import is_scenario_downloaded
+                    if not is_scenario_downloaded(name, stats_dir):
+                        import time
+                        downloaded = False
+                        for _ in range(15):
+                            time.sleep(1)
+                            if is_scenario_downloaded(name, stats_dir):
+                                downloaded = True
+                                break
+                        if not downloaded:
+                            logger.warning("Scenario '%s' failed to download locally within 15s. Marking as zombie.", name)
+                            is_zombie = True
+
                 if is_zombie:
                     if norm_name not in self._zombies:
                         self._zombies.add(norm_name)
                         self._scores_cache["zombies"] = list(self._zombies)
                         save_scores_cache(self._scores_cache)
-                    self._update_status(f"Error: '{name}' has been deleted from Steam Workshop.")
+                    self._update_status(f"Error: '{name}' has been deleted from Steam Workshop (or download failed).")
                     if self.window:
                         import json
                         safe_name = json.dumps(name)

@@ -63,7 +63,7 @@ function applyColumnWidths() {
     if (!currentData || !currentData.columns) return;
     
     if (window.currentConfig && window.currentConfig.auto_fit_columns) {
-        styleTag.textContent = '#data-table { width: 100% !important; }';
+        styleTag.textContent = '#data-table { width: 100% !important; table-layout: fixed !important; }';
         return;
     }
     

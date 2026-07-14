@@ -82,7 +82,7 @@ def get_accurate_entry_count(leaderboard_id, session=None):
     try:
         resp = api_request_with_retry(
             "get", url, params=params, timeout=15,
-            max_retries=10, session=session)
+            max_retries=2, session=session)
         if resp:
             data = resp.json()
             return int(data.get("total", 0))
@@ -141,6 +141,12 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
     all_data = []
     page = 0
 
+    if session is None:
+        session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
     # Estimate total to provide better progress/ETA
     est_total = get_estimated_fetch_count(min_entries)
     start_time = time.time()
@@ -161,6 +167,7 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
                 executor.submit(get_accurate_entry_count,
                                 it.get("leaderboardId"), session): it
                 for it in items
+                if not (it.get("counts") and it["counts"].get("entries") is not None)
             }
             for future in concurrent.futures.as_completed(future_to_item):
                 item = future_to_item[future]
@@ -184,9 +191,10 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
                     eta_s = rem_est / rate
                     mins, secs = divmod(int(eta_s), 60)
                     eta_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
-                    status_msg = (f"Fetching scenarios… {done}/{int(est_total)}"
+                    display_total = max(int(est_total), done)
+                    status_msg = (f"Fetching scenarios… {done}/{display_total}"
                                   f" — ETA {eta_str}")
-                    progress_callback(done, est_total, status_msg)
+                    progress_callback(done, display_total, status_msg)
 
             # Early stop: API returns by descending popularity
             if min_entries > 0:
@@ -274,6 +282,47 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
     return local_points
 
 
+def is_scenario_downloaded(name, stats_dir):
+    """Check if the scenario's .sce file exists locally on disk (either in Saved/SaveGames/Scenarios
+    or in the Steam Workshop content folder).
+    """
+    import os
+    import re
+
+    def normalize(s):
+        return re.sub(r'[^a-z0-9]', '', s.lower())
+
+    normalized_name = normalize(name)
+
+    if stats_dir and os.path.exists(stats_dir):
+        fps_trainer_dir = os.path.dirname(stats_dir.rstrip('/\\'))
+        local_scenarios_dir = os.path.join(fps_trainer_dir, 'Saved', 'SaveGames', 'Scenarios')
+
+        # Go up 3 levels from fps_trainer_dir to get steamapps
+        steamapps_dir = os.path.dirname(os.path.dirname(os.path.dirname(fps_trainer_dir)))
+        workshop_dir = os.path.join(steamapps_dir, 'workshop', 'content', '824270')
+
+        # Check local Scenarios folder
+        if os.path.exists(local_scenarios_dir):
+            try:
+                if any(f.endswith('.sce') and normalize(f[:-4]) == normalized_name for f in os.listdir(local_scenarios_dir)):
+                    return True
+            except OSError:
+                pass
+
+        # Check Steam Workshop content folder
+        if os.path.exists(workshop_dir):
+            try:
+                for sd in os.listdir(workshop_dir):
+                    sd_path = os.path.join(workshop_dir, sd)
+                    if os.path.isdir(sd_path) and any(f.endswith('.sce') and normalize(f[:-4]) == normalized_name for f in os.listdir(sd_path)):
+                        return True
+            except OSError:
+                pass
+
+    return False
+
+
 def is_scenario_zombie(name, stats_dir, cached_zombies=None):
     """Detect if a scenario is a zombie scenario (deleted from Steam Workshop).
 
@@ -297,31 +346,8 @@ def is_scenario_zombie(name, stats_dir, cached_zombies=None):
         return True
 
     # 2. Check local directories (no network request)
-    if stats_dir and os.path.exists(stats_dir):
-        fps_trainer_dir = os.path.dirname(stats_dir.rstrip('/\\'))
-        local_scenarios_dir = os.path.join(fps_trainer_dir, 'Saved', 'SaveGames', 'Scenarios')
-
-        # Go up 3 levels from fps_trainer_dir to get steamapps
-        steamapps_dir = os.path.dirname(os.path.dirname(os.path.dirname(fps_trainer_dir)))
-        workshop_dir = os.path.join(steamapps_dir, 'workshop', 'content', '824270')
-
-        # Check local Scenarios folder
-        if os.path.exists(local_scenarios_dir):
-            try:
-                if any(f.endswith('.sce') and normalize(f[:-4]) == normalized_name for f in os.listdir(local_scenarios_dir)):
-                    return False
-            except OSError:
-                pass
-
-        # Check Steam Workshop content folder
-        if os.path.exists(workshop_dir):
-            try:
-                for sd in os.listdir(workshop_dir):
-                    sd_path = os.path.join(workshop_dir, sd)
-                    if os.path.isdir(sd_path) and any(f.endswith('.sce') and normalize(f[:-4]) == normalized_name for f in os.listdir(sd_path)):
-                        return False
-            except OSError:
-                pass
+    if is_scenario_downloaded(name, stats_dir):
+        return False
 
     # 3. Query Steam Workshop search page
     quoted_name = urllib.parse.quote_plus(f'"{name}"')
