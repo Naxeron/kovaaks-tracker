@@ -167,7 +167,6 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
                 executor.submit(get_accurate_entry_count,
                                 it.get("leaderboardId"), session): it
                 for it in items
-                if not (it.get("counts") and it["counts"].get("entries") is not None)
             }
             for future in concurrent.futures.as_completed(future_to_item):
                 item = future_to_item[future]
