@@ -88,13 +88,21 @@ def run_fetch_all(app, username, password, silent=False):
                 return
             app._update_status("Fetching scenarios (API fallback)…")
             total_est = get_estimated_fetch_count(min_entries_threshold) + get_estimated_matching_count(min_entries_threshold)
-            def cb(done, tot, msg):
+            def check_cancel():
                 if getattr(app, "_fetch_cancelled", False) is True:
                     raise RuntimeError("Fetch cancelled")
+
+            def cb(done, tot, msg):
+                check_cancel()
                 app._update_status(msg)
                 app._update_progress(0.01 + 0.09 * min(1.0, done / total_est if total_est > 0 else 0), 1.0)
             try:
-                all_scenarios = fetch_all_scenarios(min_entries=min_entries_threshold, session=requests.Session(), progress_callback=cb)
+                all_scenarios = fetch_all_scenarios(
+                    min_entries=min_entries_threshold, 
+                    session=requests.Session(), 
+                    progress_callback=cb,
+                    cancel_check=check_cancel
+                )
             except RuntimeError as re:
                 if str(re) == "Fetch cancelled":
                     app._rebuild_data_and_cancelled(silent=silent)
@@ -244,8 +252,14 @@ def run_fetch_all(app, username, password, silent=False):
                 app._rebuild_data()
 
         session = requests.Session()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
-            executor.map(lambda lid: _fetch_one(lid, session), work_items)
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=25)
+        try:
+            futures = [executor.submit(_fetch_one, lid, session) for lid in work_items]
+            for future in concurrent.futures.as_completed(futures):
+                if getattr(app, "_fetch_cancelled", False) is True:
+                    break
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         if getattr(app, "_fetch_cancelled", False) is True:
             with lock: _save_cache()

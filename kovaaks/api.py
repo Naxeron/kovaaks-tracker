@@ -131,7 +131,7 @@ def kovaaks_get_friends_scores(token, leaderboard_id, session=None,
     return resp.json().get("data", [])
 
 
-def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
+def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, cancel_check=None):
     """Fetch scenarios from the KovaaKs API (paginated, sorted by popularity).
     Stops early when all items on a page fall below *min_entries*.
     """
@@ -152,11 +152,16 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
     start_time = time.time()
 
     # Single executor for the entire fetch (perf fix: was per-page before)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+    try:
         while True:
+            if cancel_check:
+                cancel_check()
             logger.debug("Fetching all scenarios page %d", page)
             params = {"page": page, "max": 100}
             resp = api_request_with_retry("get", url, params=params, session=session)
+            if resp is None:
+                break
             data = resp.json()
             items = data.get("data", [])
             if not items:
@@ -169,6 +174,8 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
                 for it in items
             }
             for future in concurrent.futures.as_completed(future_to_item):
+                if cancel_check:
+                    cancel_check()
                 item = future_to_item[future]
                 accurate_count = future.result()
                 if accurate_count is not None:
@@ -211,6 +218,8 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None):
             if len(all_data) >= total:
                 break
             time.sleep(0.1)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     logger.info("Fetched %d total scenarios with accurate counts", len(all_data))
     return all_data

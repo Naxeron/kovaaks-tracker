@@ -34,7 +34,8 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100):
     session.mount("http://", adapter)
     
     # Single executor for the entire fetch (perf: was per-page before)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+    try:
         while True:
             if pages_limit > 0 and page >= pages_limit:
                 logger.info(f"Reached page limit of {pages_limit}")
@@ -84,6 +85,8 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100):
             
             # Respectful delay
             time.sleep(0.2)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     logger.info(f"Fetched {len(all_data)} total scenarios")
     return all_data

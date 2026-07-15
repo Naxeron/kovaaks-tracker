@@ -7,11 +7,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kovaaks.fetch_worker import run_fetch_all
 
 class TestFetchWorkerWorkItems:
+    @patch("concurrent.futures.as_completed")
     @patch("kovaaks.fetch_worker.fetch_gzip_json_from_github")
     @patch("kovaaks.fetch_worker.kovaaks_login")
     @patch("concurrent.futures.ThreadPoolExecutor")
     @patch("kovaaks.fetch_worker.save_scores_cache")
-    def test_run_fetch_all_work_items_selection(self, mock_save, mock_executor, mock_login, mock_github):
+    def test_run_fetch_all_work_items_selection(self, mock_save, mock_executor, mock_login, mock_github, mock_as_completed):
         # 1. Setup mock app
         app = MagicMock()
         app._cfg = {"min_entries": 10}
@@ -57,18 +58,18 @@ class TestFetchWorkerWorkItems:
         # Capture the work items sent to the executor
         captured_work_items = []
         
-        class MockExecutorContext:
-            def __init__(self, *args, **kwargs):
-                pass
-            def __enter__(self):
-                return self
-            def __exit__(self, exc_type, exc_val, exc_tb):
-                pass
-            def map(self, fn, items):
-                nonlocal captured_work_items
-                captured_work_items = list(items)
-                
-        mock_executor.side_effect = MockExecutorContext
+        # Mock as_completed to just yield the mock futures
+        mock_as_completed.side_effect = lambda futures: iter(futures)
+
+        def mock_submit(fn, lid, session):
+            captured_work_items.append(lid)
+            future = MagicMock()
+            future.result.return_value = None
+            return future
+
+        mock_instance = MagicMock()
+        mock_instance.submit.side_effect = mock_submit
+        mock_executor.return_value = mock_instance
         
         # Run fetch
         run_fetch_all(app, "test_user", "test_pass")
