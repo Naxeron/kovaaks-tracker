@@ -54,6 +54,13 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100):
             if not items:
                 break
 
+            # Check if we should stop based on the original API counts (before accurate overwrite)
+            max_on_page = max(
+                (int(it.get("counts", {}).get("entries", 0)) for it in items),
+                default=0,
+            )
+            should_stop = max_on_page < entries_limit
+
             # Fetch accurate entry counts in parallel for the current page
             future_to_item = {
                 executor.submit(get_accurate_entry_count, it.get("leaderboardId"), session): it
@@ -66,15 +73,12 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100):
                     if "counts" not in item:
                         item["counts"] = {}
                     item["counts"]["entries"] = accurate_count
+                    if "scenario" in item and "counts" in item["scenario"]:
+                        item["scenario"]["counts"]["entries"] = accurate_count
 
             all_data.extend(items)
             
-            # Check if we should stop
-            max_on_page = max(
-                (int(it.get("counts", {}).get("entries", 0)) for it in items),
-                default=0,
-            )
-            if max_on_page < entries_limit:
+            if should_stop:
                 logger.info(f"Stopping at page {page} - max entries {max_on_page} < {entries_limit}")
                 break
 

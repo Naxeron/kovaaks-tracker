@@ -1,6 +1,5 @@
 # Credentials and local config
 config.json
-.agents/
 
 # Logs
 *.log
