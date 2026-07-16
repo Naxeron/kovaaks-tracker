@@ -763,8 +763,14 @@ class KovaaksAPI:
                 is_zombie = is_scenario_zombie(name, stats_dir, self._zombies)
                 download_failed = False
                 
+                from kovaaks.api import is_scenario_downloaded
+                
+                # Re-verify if it downloaded while the zombie check was running
+                if is_zombie and is_scenario_downloaded(name, stats_dir):
+                    logger.info("Scenario '%s' was flagged as zombie, but was found locally. Clearing zombie flag.", name)
+                    is_zombie = False
+                
                 if not is_zombie:
-                    from kovaaks.api import is_scenario_downloaded
                     if not is_scenario_downloaded(name, stats_dir):
                         import time
                         downloaded = False
