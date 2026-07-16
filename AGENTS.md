@@ -28,3 +28,7 @@ Implement or update automated tests for features, business logic, bugs.
 * **Dynamic Timestamp Parsing:** Extract timestamps from file/log names when checking temporal conditions (such as runs in the last 24 hours) to avoid opening or reading the file contents.
 * **Avoid Redundant Disk Saves:** Set a dirty flag when cache data is modified, and only perform disk writes (like slow gzip saves) if changes have actually occurred.
 
+
+## 5. API Data Quirks & Accuracy
+* **Entry Counts**: Do NOT rely on the `counts.entries` field from the `/scenario/popular` KovaaKs API endpoint, as it often returns heavily inflated/inaccurate numbers (e.g., tracking total plays or bot spam). To get the actual unique player count for a scenario, you MUST query the `/leaderboard/scores/global` endpoint (via `get_accurate_entry_count`). Do not optimize away these fetches even if the popular endpoint provides a count.
+* **Pagination Warning**: Because the `/scenario/popular` API endpoint natively sorts by these *inflated* counts, you must evaluate any pagination early-exit conditions (e.g., `max_on_page < entries_limit`) using the **original inflated numbers** *before* overwriting them with the accurate ones. Evaluating limits on the accurate counts will prematurely abort the pagination loop.
