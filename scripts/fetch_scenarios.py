@@ -22,7 +22,7 @@ SCENARIOS_JSON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__
 SCENARIOS_HISTORY_JSON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "scenarios_history.json.gz")
 
 
-def fetch_all_scenarios(pages_limit=0, entries_limit=100):
+def fetch_all_scenarios(pages_limit=0, entries_limit=100, existing_scenarios=None):
     url = "https://kovaaks.com/webapp-backend/scenario/popular"
     all_data = []
     page = 0
@@ -45,6 +45,8 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100):
             params = {"page": page, "max": 100}
             try:
                 resp = api_request_with_retry("get", url, params=params, session=session)
+                if resp is None:
+                    break
                 data = resp.json()
             except Exception as e:
                 logger.error(f"Failed to fetch page {page}: {e}")
@@ -69,12 +71,23 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100):
             for future in concurrent.futures.as_completed(future_to_item):
                 item = future_to_item[future]
                 accurate_count = future.result()
-                if accurate_count is not None:
-                    if "counts" not in item:
-                        item["counts"] = {}
-                    item["counts"]["entries"] = accurate_count
-                    if "scenario" in item and "counts" in item["scenario"]:
-                        item["scenario"]["counts"]["entries"] = accurate_count
+                
+                if accurate_count is None and existing_scenarios:
+                    old_item = existing_scenarios.get(item.get("leaderboardId"))
+                    if old_item:
+                        try:
+                            accurate_count = int(old_item.get("counts", {}).get("entries", 0))
+                        except (ValueError, TypeError):
+                            pass
+                            
+                if accurate_count is None:
+                    accurate_count = 0
+                    
+                if "counts" not in item:
+                    item["counts"] = {}
+                item["counts"]["entries"] = accurate_count
+                if "scenario" in item and "counts" in item["scenario"]:
+                    item["scenario"]["counts"]["entries"] = accurate_count
 
             all_data.extend(items)
             
@@ -116,7 +129,7 @@ if __name__ == "__main__":
                 logger.warning(f"Could not load existing scenarios: {e}")
 
         # Fetch new scenarios
-        new_scenarios_list = fetch_all_scenarios(pages_limit=args.pages, entries_limit=args.min_entries)
+        new_scenarios_list = fetch_all_scenarios(pages_limit=args.pages, entries_limit=args.min_entries, existing_scenarios=existing_scenarios)
         
         # Merge new into existing (new overwrites old for same leaderboardId)
         for s in new_scenarios_list:

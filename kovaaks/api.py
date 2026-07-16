@@ -118,7 +118,7 @@ def kovaaks_login(username, password):
 
 
 def kovaaks_get_friends_scores(token, leaderboard_id, session=None,
-                                timeout=30, max_retries=999):
+                                timeout=30, max_retries=2):
     """Fetch friends' scores for a given leaderboard ID."""
     url = "https://kovaaks.com/webapp-backend/leaderboard/scores/friends"
     headers = {**KOVAAKS_HEADERS, "Authorization": f"Bearer {token}"}
@@ -128,6 +128,8 @@ def kovaaks_get_friends_scores(token, leaderboard_id, session=None,
         "max": 50,
     }, headers=headers, timeout=timeout, max_retries=max_retries,
        session=session)
+    if resp is None:
+        return []
     return resp.json().get("data", [])
 
 
@@ -178,12 +180,14 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, can
                     cancel_check()
                 item = future_to_item[future]
                 accurate_count = future.result()
-                if accurate_count is not None:
-                    if "counts" not in item:
-                        item["counts"] = {}
-                    item["counts"]["entries"] = accurate_count
-                    if "scenario" in item and "counts" in item["scenario"]:
-                        item["scenario"]["counts"]["entries"] = accurate_count
+                if accurate_count is None:
+                    accurate_count = 0
+                
+                if "counts" not in item:
+                    item["counts"] = {}
+                item["counts"]["entries"] = accurate_count
+                if "scenario" in item and "counts" in item["scenario"]:
+                    item["scenario"]["counts"]["entries"] = accurate_count
 
             all_data.extend(items)
 
