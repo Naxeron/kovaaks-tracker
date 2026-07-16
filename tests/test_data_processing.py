@@ -218,12 +218,14 @@ class TestRebuildDataRows:
         # Should be a numeric string
         int(row["Potential"])  # Should not raise
 
+    @patch('kovaaks_web.save_scores_cache')
     @patch('kovaaks.api.get_next_leaderboard_position_points')
-    def test_get_next_rank_points(self, mock_get_points):
+    def test_get_next_rank_points(self, mock_get_points, mock_save_cache):
         class KovaaksAPIStub:
             def __init__(self):
                 self._global_points_sum = 0
                 self._cfg = {"username": ""}
+                self._scores_cache = {}
             
             get_next_rank_points = kovaaks_web.KovaaksAPI.get_next_rank_points
 
@@ -243,6 +245,7 @@ class TestRebuildDataRows:
         mock_get_points.assert_called_with("player1", 5000)
         
         # 4. Rank 1 (next points <= current points)
+        app._scores_cache.clear()
         mock_get_points.return_value = 4500
         assert app.get_next_rank_points() == "Rank 1!"
         

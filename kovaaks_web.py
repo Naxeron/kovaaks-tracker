@@ -499,9 +499,50 @@ class KovaaksAPI:
             if not username:
                 return "N/A (No Username)"
             
+            cached = self._scores_cache.get("next_rank", {})
+            cached_pts = cached.get("points")
+            cached_user = cached.get("username")
+            cached_time = cached.get("timestamp", 0)
+            
+            import time
+            now = time.time()
+            
+            def fetch_and_update():
+                try:
+                    import kovaaks.api as api
+                    next_points = api.get_next_leaderboard_position_points(username, current_points)
+                    if next_points and next_points > current_points:
+                        self._scores_cache["next_rank"] = {
+                            "username": username,
+                            "points": next_points,
+                            "timestamp": time.time()
+                        }
+                        save_scores_cache(self._scores_cache)
+                        diff = int(next_points - current_points)
+                        if hasattr(self, 'window') and self.window:
+                            self.window.evaluate_js(f"if(document.getElementById('stat-next-rank')) document.getElementById('stat-next-rank').textContent = '+{diff:,}';")
+                except Exception as e:
+                    logger.warning("Background next rank fetch failed: %s", e)
+
+            # If cache is valid for this user and current points
+            if cached_user == username and cached_pts and cached_pts > current_points:
+                # Refresh in background if older than 1 hour to keep threshold reasonably fresh
+                if now - cached_time > 3600:
+                    import threading
+                    threading.Thread(target=fetch_and_update, daemon=True).start()
+                diff = int(cached_pts - current_points)
+                return f"+{diff:,}"
+
+            # Cache miss or user surpassed the old cached threshold, fetch synchronously
             import kovaaks.api as api
             next_points = api.get_next_leaderboard_position_points(username, current_points)
             if next_points and next_points > current_points:
+                self._scores_cache["next_rank"] = {
+                    "username": username,
+                    "points": next_points,
+                    "timestamp": now
+                }
+                save_scores_cache(self._scores_cache)
                 diff = int(next_points - current_points)
                 return f"+{diff:,}"
             else:
