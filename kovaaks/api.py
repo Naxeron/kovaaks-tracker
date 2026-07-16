@@ -33,7 +33,7 @@ KOVAAKS_HEADERS = {
 # Retry wrapper
 # ---------------------------------------------------------------------------
 
-def api_request_with_retry(method, url, timeout=30, max_retries=999,
+def api_request_with_retry(method, url, timeout=30, max_retries=3,
                            session=None, **kwargs):
     """Make an HTTP request with retry on timeouts/5xx and exponential backoff.
 
