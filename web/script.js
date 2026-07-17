@@ -117,8 +117,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnStopFetch) {
         btnStopFetch.addEventListener('click', async () => {
             if (window.pywebview && window.pywebview.api) {
-                await window.pywebview.api.cancel_fetch();
-                setStatus("Stopping fetch...");
+                const cancelled = await window.pywebview.api.cancel_fetch();
+                if (cancelled) {
+                    setStatus("Stopping fetch...");
+                } else {
+                    fetchData();
+                }
             }
         });
     }

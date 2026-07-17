@@ -394,8 +394,10 @@ class KovaaksAPI:
 
 
 
-    def _rebuild_data_and_finish(self, errors=0, silent=False):
-        self._update_status(f"Fetch complete with {errors} errors.")
+    def _rebuild_data_and_finish(self, errors=0, silent=False, msg=None):
+        if msg is None:
+            msg = f"Fetch complete with {errors} errors."
+        self._update_status(msg)
         self._update_progress(1.0, 1.0)
         if self.window:
             import json
