@@ -107,3 +107,24 @@ class TestCalculatePotentialScore:
         pot_plateau = calculate_potential_score(500, 1000, lstats_plateau, now, 1.0)
         
         assert pot_plateau < pot_improving
+
+    def test_expected_pct_below_average(self):
+        now = datetime.datetime.now()
+        lstats = {}
+        # Rank 500 out of 1000 => current pct = 50%
+        # Case A: expected_pct is 80%. Target is 80%, so gap is 30%.
+        pot_below = calculate_potential_score(500, 1000, lstats, now, 1.0, expected_pct=80.0)
+        
+        # Case B: expected_pct is 50%. Target is 50%, so gap is 0% + stretch goal (5%) = 5%
+        pot_equal = calculate_potential_score(500, 1000, lstats, now, 1.0, expected_pct=50.0)
+        
+        assert pot_below > pot_equal
+
+    def test_expected_pct_above_average(self):
+        now = datetime.datetime.now()
+        lstats = {}
+        # Rank 200 out of 1000 => current pct = 80%
+        # expected_pct is 60%. Current is above average. Target stretch goal is 80% + (20%)*0.1 = 82%.
+        # Gap is 2%.
+        pot_above = calculate_potential_score(200, 1000, lstats, now, 1.0, expected_pct=60.0)
+        assert pot_above > 0

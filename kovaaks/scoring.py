@@ -52,7 +52,7 @@ def parse_popularity_metrics(hist, now_datetime=None):
     return popularity_trend, actual_new_entries
 
 
-def calculate_potential_score(rank, entries, lstats, now, competition_multiplier):
+def calculate_potential_score(rank, entries, lstats, now, competition_multiplier, expected_pct=None):
     """Calculate Potential Score using a multi-factor priority algorithm.
 
     1. Logarithmic Potential — neutralizes population bias
@@ -69,7 +69,12 @@ def calculate_potential_score(rank, entries, lstats, now, competition_multiplier
         pct = (1 - rank / entries) * 100
         
         # 1. Logarithmic Potential
-        skill_gap = 1.0 - pct / 100.0
+        if expected_pct is None:
+            skill_gap = 1.0 - pct / 100.0
+        else:
+            target_pct = max(expected_pct, pct + (100.0 - pct) * 0.1)
+            skill_gap = (target_pct - pct) / 100.0
+            
         log_weight = math.log10(max(rank, 10))
         base_potential = log_weight * skill_gap
 
