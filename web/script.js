@@ -728,13 +728,28 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 let autoRefreshTimer = null;
+let currentAutoRefreshState = {
+    enabled: null,
+    interval: null
+};
+
 function setupAutoRefresh(cfg) {
+    const enabled = !!cfg.auto_refresh;
+    const interval = Math.max(1, parseInt(cfg.refresh_interval) || 2);
+
+    if (currentAutoRefreshState.enabled === enabled && currentAutoRefreshState.interval === interval) {
+        return;
+    }
+
     if (autoRefreshTimer) {
         clearInterval(autoRefreshTimer);
         autoRefreshTimer = null;
     }
-    if (cfg.auto_refresh) {
-        const interval = Math.max(1, parseInt(cfg.refresh_interval) || 2);
+
+    currentAutoRefreshState.enabled = enabled;
+    currentAutoRefreshState.interval = interval;
+
+    if (enabled) {
         autoRefreshTimer = setInterval(() => {
             startFetch(true);
         }, interval * 60 * 60 * 1000);
