@@ -159,8 +159,7 @@ def run_fetch_all(app, username, password, silent=False):
 
         if not app._jwt_token:
             app._rebuild_data()
-            app._update_status(f"Done (Scenario list updated) — {len(master)} scenarios.")
-            app._update_progress(100, 100)
+            app._rebuild_data_and_finish(silent=silent, msg=f"Done (Scenario list updated) — {len(master)} scenarios.")
             return
 
         all_lids = list(scenario_info.keys())
@@ -268,8 +267,8 @@ def run_fetch_all(app, username, password, silent=False):
 
         if session_expired:
             with lock: _save_cache()
-            app._update_status("Session expired — progress saved. Try again.")
             app._jwt_token = None
+            app._rebuild_data_and_finish(silent=silent, msg="Session expired — progress saved. Try again.")
             return
 
         with lock: _save_cache()
