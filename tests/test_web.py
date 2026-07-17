@@ -671,4 +671,22 @@ def test_rebuild_data_and_cancelled_passes_silent(mock_polling, mock_load_cache,
     mock_window.evaluate_js.assert_called_with("fetchData(false)")
 
 
+def test_auto_refresh_timer_prevents_redundant_resets():
+    js_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "web",
+        "script.js"
+    )
+    assert os.path.exists(js_path)
+    with open(js_path, "r", encoding="utf-8") as f:
+        js_content = f.read()
+
+    # The tracker object should exist
+    assert "currentAutoRefreshState" in js_content
+    # The setupAutoRefresh function should check if the active state equals the config values
+    assert "currentAutoRefreshState.enabled === enabled" in js_content
+    assert "currentAutoRefreshState.interval === interval" in js_content
+
+
+
 
