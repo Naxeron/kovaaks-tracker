@@ -35,7 +35,7 @@ def load_scores_cache():
 def save_scores_cache(cache_dict):
     """Save the unified cache dict to gzip-compressed JSON atomically."""
     with _cache_lock:
-        tmp_cache = SCORES_CACHE + ".tmp"
+        tmp_cache = SCORES_CACHE + f".{os.getpid()}.tmp"
         try:
             with gzip.open(tmp_cache, "wt", encoding="utf-8") as f:
                 json.dump(cache_dict, f, separators=(",", ":"))
