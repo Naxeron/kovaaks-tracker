@@ -472,8 +472,8 @@ tr.zombie-row td {
     border-radius: 4px;
     padding: 10px;
     position: absolute;
-    z-index: 100;
-    bottom: 125%; /* Place the tooltip above the text */
+    z-index: 9999;
+    top: calc(100% + 5px); /* Place the tooltip below the text */
     left: 50%;
     transform: translateX(-50%);
     opacity: 0;
@@ -487,12 +487,12 @@ tr.zombie-row td {
 .tooltip-content::after {
     content: "";
     position: absolute;
-    top: 100%; /* At the bottom of the tooltip */
+    bottom: 100%; /* At the top of the tooltip */
     left: 50%;
     margin-left: -5px;
     border-width: 5px;
     border-style: solid;
-    border-color: var(--surface-color) transparent transparent transparent;
+    border-color: transparent transparent var(--surface-color) transparent;
 }
 
 .tooltip-container:hover .tooltip-content {
