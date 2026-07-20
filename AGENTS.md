@@ -8,6 +8,7 @@ Implement or update automated tests for features, business logic, bugs.
 * **Unit/Integration Tests**: Cover core computations, edge cases, error handling.
 * **Test Location**: Put Python tests under `tests/` directory, filename prefix `test_`.
 * **Verification**: Run `pytest` before completion. Ensure tests pass. `pytest` only scans `tests/` via `pytest.ini` for headless, fast runs. Do not import `tkinter` or instantiate GUI widgets at module level in tests.
+* **Test Isolation**: Ensure tests never read or write production files. Any tests interacting with caches, configs, or stats must patch paths (such as `SCORES_CACHE` and `CONFIG_PATH`) to temporary test directories (e.g. `tmp_path`) to prevent side-effects on production data.
 
 ## 2. Code Quality & Idiomatic Python
 * Write clean Python. Prefer list comprehensions, generator expressions, built-ins over loops.
@@ -26,7 +27,9 @@ Implement or update automated tests for features, business logic, bugs.
 * **Test Environment Synchronization:** When running under unit tests (detected via `"pytest" in sys.modules`), bypass background loading and run initialization synchronously. This prevents race conditions with mocks and assertions in the test suite.
 * **Incremental File Parsing:** Do not scan or read large lists of historical files from disk on every startup. Cache parsed file statistics in the main JSON/gzip cache. Compare the active directory listing to cached files and incrementally parse only newly added files.
 * **Dynamic Timestamp Parsing:** Extract timestamps from file/log names when checking temporal conditions (such as runs in the last 24 hours) to avoid opening or reading the file contents.
-* **Avoid Redundant Disk Saves:** Set a dirty flag when cache data is modified, and only perform disk writes (like slow gzip saves) if changes have actually occurred.
+* **Avoid Redundant Disk Saves**: Set a dirty flag when cache data is modified, and only perform disk writes (like slow gzip saves) if changes have actually occurred.
+* **Atomic Save Safety**: When performing atomic file saves (e.g., writing to a `.tmp` file and using `os.replace`), use process-unique temporary filenames (e.g., appending the current process PID) to prevent concurrent processes or test runs from colluding and corrupting the temporary file.
+* **Corrupt Load Safeguards**: If the cache file exists but fails to load on startup (due to temporary locks or corruption), set a flag to prevent the application from writing back or saving an empty cache over it, keeping the file contents intact for recovery.
 
 
 ## 5. API Data Quirks & Accuracy
