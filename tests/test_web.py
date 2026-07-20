@@ -28,6 +28,7 @@ def test_play_scenario(mock_load_cache, mock_load_config):
     api = KovaaksAPI()
 
     with patch("kovaaks.api.is_scenario_zombie", return_value=False), \
+         patch("kovaaks.api.is_scenario_downloaded", return_value=True), \
          patch("threading.Thread", SyncThread), \
          patch("webbrowser.open") as mock_webbrowser_open:
         res = api.play_scenario("1wall 6targets TE")
@@ -46,6 +47,7 @@ def test_play_scenario_handles_exception(mock_load_cache, mock_load_config):
     api = KovaaksAPI()
 
     with patch("kovaaks.api.is_scenario_zombie", return_value=False), \
+         patch("kovaaks.api.is_scenario_downloaded", return_value=True), \
          patch("threading.Thread", SyncThread), \
          patch("webbrowser.open", side_effect=Exception("Webbrowser error")):
         res = api.play_scenario("Pasu Voltaic Easy")
