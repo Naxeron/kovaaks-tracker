@@ -1025,11 +1025,21 @@ function renderTable() {
             document.getElementById('stat-potential').textContent = currentData.global_stats.potential_points.toLocaleString();
             document.getElementById('stat-next-rank').textContent = 'Loading...';
             document.getElementById('stat-scenarios-left').textContent = 'Loading...';
+            document.getElementById('stat-current-pct').textContent = 'Loading...';
+            document.getElementById('stat-required-pct').textContent = 'Loading...';
             if (window.pywebview && window.pywebview.api) {
                 window.pywebview.api.get_next_rank_points().then(res => {
                     document.getElementById('stat-next-rank').textContent = res;
-                    window.pywebview.api.get_scenarios_left_to_next_rank().then(unplayedRes => {
-                        document.getElementById('stat-scenarios-left').textContent = unplayedRes;
+                    window.pywebview.api.get_scenarios_left_to_next_rank().then(valDict => {
+                        if (valDict && typeof valDict === 'object') {
+                            document.getElementById('stat-scenarios-left').textContent = valDict.count || 'N/A';
+                            document.getElementById('stat-current-pct').textContent = valDict.global_avg_pct || 'N/A';
+                            document.getElementById('stat-required-pct').textContent = valDict.required_avg_pct || 'N/A';
+                        } else {
+                            document.getElementById('stat-scenarios-left').textContent = valDict || 'N/A';
+                            document.getElementById('stat-current-pct').textContent = 'N/A';
+                            document.getElementById('stat-required-pct').textContent = 'N/A';
+                        }
                     });
                 });
             }
@@ -1050,6 +1060,8 @@ function renderTable() {
             document.getElementById('stat-potential').textContent = pot.toLocaleString();
             document.getElementById('stat-next-rank').textContent = "+?";
             document.getElementById('stat-scenarios-left').textContent = "?";
+            document.getElementById('stat-current-pct').textContent = "?";
+            document.getElementById('stat-required-pct').textContent = "?";
         }
         document.getElementById('stat-rows').textContent = filteredRows.length + ' rows';
     }

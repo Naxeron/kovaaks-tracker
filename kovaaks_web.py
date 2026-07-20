@@ -206,6 +206,8 @@ class KovaaksAPI:
         self._global_potential_points_sum = 0
         self._global_projected_gain_sum = 0
         expected_gains = []
+        candidate_sum_entries = 0
+        candidate_sum_current_pts = 0
 
         aim_type_pcts = {}
         for lid, info in scenario_info.items():
@@ -217,6 +219,7 @@ class KovaaksAPI:
         aim_type_avgs = {atype: sum(pcts) / len(pcts) for atype, pcts in aim_type_pcts.items()}
         all_pcts = [p for pcts in aim_type_pcts.values() for p in pcts]
         global_avg_pct = sum(all_pcts) / len(all_pcts) if all_pcts else 50.0
+        self._global_avg_pct = global_avg_pct
 
         stats_dir = self._get_stats_dir()
         # Use cached local stats unless marked dirty
@@ -296,12 +299,15 @@ class KovaaksAPI:
                         self._global_projected_gain_sum += gain
                         row["_projected_gain"] = gain
                         expected_gains.append(gain)
+                        candidate_sum_entries += e_val
+                        candidate_sum_current_pts += (e_val - r_val)
                 else:
                     self._global_potential_points_sum += (e_val - 1)
                     gain = e_val - expected_rank
                     self._global_projected_gain_sum += gain
                     row["_projected_gain"] = gain
                     expected_gains.append(gain)
+                    candidate_sum_entries += e_val
             except (ValueError, TypeError):
                 pass
 
@@ -393,6 +399,8 @@ class KovaaksAPI:
             else:
                 unplayed_rows.append(r)
         self._scenarios_expected_gains = sorted(expected_gains, reverse=True)
+        self._candidate_sum_entries = candidate_sum_entries
+        self._candidate_sum_current_pts = candidate_sum_current_pts
         return played_rows, unplayed_rows
 
     # -------------------------------------------------------------------
@@ -532,9 +540,12 @@ class KovaaksAPI:
                         diff = int(next_points - current_points)
                         if hasattr(self, 'window') and self.window:
                             self.window.evaluate_js(f"if(document.getElementById('stat-next-rank')) document.getElementById('stat-next-rank').textContent = '+{diff:,}';")
-                            unplayed_val = self.get_scenarios_left_to_next_rank()
-                            safe_unplayed = json.dumps(unplayed_val)
-                            self.window.evaluate_js(f"if(document.getElementById('stat-scenarios-left')) document.getElementById('stat-scenarios-left').textContent = {safe_unplayed};")
+                            val_dict = self.get_scenarios_left_to_next_rank()
+                            self.window.evaluate_js(f"""
+                                if(document.getElementById('stat-scenarios-left')) document.getElementById('stat-scenarios-left').textContent = {json.dumps(val_dict.get('count'))};
+                                if(document.getElementById('stat-current-pct')) document.getElementById('stat-current-pct').textContent = {json.dumps(val_dict.get('global_avg_pct'))};
+                                if(document.getElementById('stat-required-pct')) document.getElementById('stat-required-pct').textContent = {json.dumps(val_dict.get('required_avg_pct'))};
+                            """)
                 except Exception as e:
                     logger.warning("Background next rank fetch failed: %s", e)
 
@@ -569,37 +580,61 @@ class KovaaksAPI:
         try:
             current_points = getattr(self, '_global_points_sum', 0)
             if current_points <= 0:
-                return "N/A"
+                return {"count": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
             username = self._cfg.get("username", "").strip()
             if not username:
-                return "N/A"
+                return {"count": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
             
             cached = self._scores_cache.get("next_rank", {})
             cached_pts = cached.get("points")
             cached_user = cached.get("username")
             
             if cached_user != username or not cached_pts:
-                return "N/A"
+                return {"count": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
                 
             diff = int(cached_pts - current_points)
+            
+            global_avg_pct_val = getattr(self, '_global_avg_pct', 0.0)
+            global_avg_pct_str = f"{global_avg_pct_val:.2f}%"
+            
             if diff <= 0:
-                return "0"
+                return {"count": "0", "global_avg_pct": global_avg_pct_str, "required_avg_pct": "0.00%"}
                 
             if not hasattr(self, '_scenarios_expected_gains') or not self._scenarios_expected_gains:
-                return "N/A"
+                return {"count": "N/A", "global_avg_pct": global_avg_pct_str, "required_avg_pct": "N/A"}
                 
             sum_gains = 0
             count = 0
+            count_str = f">{len(self._scenarios_expected_gains)}"
             for gain in self._scenarios_expected_gains:
                 sum_gains += gain
                 count += 1
                 if sum_gains >= diff:
-                    return str(count)
-            
-            return f">{len(self._scenarios_expected_gains)}"
+                    count_str = str(count)
+                    break
+                
+            # Calculate required average percentile
+            sum_entries = getattr(self, '_candidate_sum_entries', 0)
+            sum_current_pts = getattr(self, '_candidate_sum_current_pts', 0)
+            if sum_entries > 0:
+                required_pct_val = 100.0 * (diff + sum_current_pts) / sum_entries
+                if required_pct_val > 100.0:
+                    required_pct_str = ">100%"
+                elif required_pct_val <= 0.0:
+                    required_pct_str = "0.00%"
+                else:
+                    required_pct_str = f"{required_pct_val:.2f}%"
+            else:
+                required_pct_str = "N/A"
+                
+            return {
+                "count": count_str,
+                "global_avg_pct": global_avg_pct_str,
+                "required_avg_pct": required_pct_str
+            }
         except Exception as e:
             logger.warning("Error calculating scenarios left: %s", e)
-            return "Error"
+            return {"count": "Error", "global_avg_pct": "Error", "required_avg_pct": "Error"}
 
     def get_logs(self):
         log_file = "kovaaks.log"

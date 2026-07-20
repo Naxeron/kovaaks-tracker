@@ -451,3 +451,62 @@ tr.zombie-row td {
     text-decoration-color: rgba(255, 255, 255, 0.15);
 }
 
+/* Tooltip styling */
+.tooltip-container {
+    position: relative;
+    cursor: help;
+    display: inline-block;
+}
+
+.tooltip-trigger {
+    border-bottom: 1px dashed var(--text-secondary);
+}
+
+.tooltip-content {
+    visibility: hidden;
+    width: 250px;
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    text-align: left;
+    border-radius: 4px;
+    padding: 10px;
+    position: absolute;
+    z-index: 100;
+    bottom: 125%; /* Place the tooltip above the text */
+    left: 50%;
+    transform: translateX(-50%);
+    opacity: 0;
+    transition: opacity 0.3s, visibility 0.3s;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    font-size: 11px;
+    line-height: 1.5;
+    pointer-events: none;
+}
+
+.tooltip-content::after {
+    content: "";
+    position: absolute;
+    top: 100%; /* At the bottom of the tooltip */
+    left: 50%;
+    margin-left: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: var(--surface-color) transparent transparent transparent;
+}
+
+.tooltip-container:hover .tooltip-content {
+    visibility: visible;
+    opacity: 1;
+}
+
+.tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.tooltip-row:last-child {
+    margin-bottom: 0;
+}
+
