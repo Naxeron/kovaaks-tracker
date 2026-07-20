@@ -115,6 +115,7 @@ def run_fetch_all(app, username, password, silent=False):
             app._rebuild_data_and_cancelled(silent=silent)
             return
         scores_cache["scenarios"] = all_scenarios
+        app._cache_corrupted = False
         app._update_progress(0.12, 1.0)
         save_scores_cache(scores_cache)
         app._update_progress(0.15, 1.0)

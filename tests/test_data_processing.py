@@ -252,3 +252,58 @@ class TestRebuildDataRows:
         # 5. Exception handled
         mock_get_points.side_effect = Exception("API error")
         assert app.get_next_rank_points() == "Error"
+
+    def test_get_unplayed_left_to_next_rank(self):
+        class KovaaksAPIStub:
+            def __init__(self):
+                self._global_points_sum = 0
+                self._cfg = {"username": ""}
+                self._scores_cache = {}
+                self._unplayed_expected_gains = []
+            
+            get_unplayed_left_to_next_rank = kovaaks_web.KovaaksAPI.get_unplayed_left_to_next_rank
+
+        app = KovaaksAPIStub()
+
+        # 1. Zero points
+        assert app.get_unplayed_left_to_next_rank() == "N/A"
+
+        # 2. No username
+        app._global_points_sum = 1000
+        assert app.get_unplayed_left_to_next_rank() == "N/A"
+
+        # 3. No cached next_rank / mismatched user
+        app._cfg["username"] = "player1"
+        assert app.get_unplayed_left_to_next_rank() == "N/A"
+
+        app._scores_cache["next_rank"] = {
+            "username": "different_player",
+            "points": 1500
+        }
+        assert app.get_unplayed_left_to_next_rank() == "N/A"
+
+        # 4. Cache exists but next points <= current points
+        app._scores_cache["next_rank"] = {
+            "username": "player1",
+            "points": 1000
+        }
+        assert app.get_unplayed_left_to_next_rank() == "0"
+
+        # 5. Normal case where diff is met
+        app._scores_cache["next_rank"]["points"] = 1500  # diff = 500
+        app._unplayed_expected_gains = [300, 200, 100]
+        assert app.get_unplayed_left_to_next_rank() == "2"
+
+        # 6. Diff met by exceeding
+        app._scores_cache["next_rank"]["points"] = 1450  # diff = 450
+        assert app.get_unplayed_left_to_next_rank() == "2"
+
+        # 7. All unplayed scenarios are not enough
+        app._scores_cache["next_rank"]["points"] = 2000  # diff = 1000
+        assert app.get_unplayed_left_to_next_rank() == ">3"
+
+        # 8. Exact match at 0 diff
+        app._scores_cache["next_rank"]["points"] = 1000  # diff = 0
+        # Wait, if diff <= 0, it returns "0"
+        assert app.get_unplayed_left_to_next_rank() == "0"
+

@@ -16,7 +16,7 @@ import math
 
 from kovaaks.constants import MIN_ENTRIES
 from kovaaks.config_helpers import load_config
-from kovaaks.cache import load_scores_cache, load_scenarios_from_cache, save_scores_cache
+from kovaaks.cache import load_scores_cache, load_scenarios_from_cache, save_scores_cache, SCORES_CACHE
 from kovaaks.scoring import calculate_potential_score
 from kovaaks.stats import get_local_stats as _get_local_stats
 from kovaaks.fetch_worker import run_fetch_all
@@ -70,6 +70,7 @@ class KovaaksAPI:
         self._filters = {}
         self._known_stat_files = set()
         self._jwt_token = None
+        self._unplayed_expected_gains = []
         
         self._cache_loaded_event = threading.Event()
         if "pytest" in sys.modules:
@@ -93,7 +94,7 @@ class KovaaksAPI:
         self._update_progress(1, 1)
         
         # Save the updated scores cache in case get_local_stats added new local runs
-        if self._scores_cache.pop("_dirty", False):
+        if self._scores_cache.pop("_dirty", False) and not getattr(self, "_cache_corrupted", False):
             save_scores_cache(self._scores_cache)
         
         self._cache_loaded_event.set()
@@ -129,7 +130,11 @@ class KovaaksAPI:
     def _load_cache_and_populate(self):
         """Load the unified JSON cache and populate tabs with cached data."""
         if not self._scores_cache:
+            import os
+            cache_exists = os.path.exists(SCORES_CACHE)
             self._scores_cache = load_scores_cache()
+            if cache_exists and not self._scores_cache:
+                self._cache_corrupted = True
 
         self._zombies = set(self._scores_cache.setdefault("zombies", []))
         all_scenarios = load_scenarios_from_cache(self._scores_cache)
@@ -200,6 +205,7 @@ class KovaaksAPI:
         self._global_points_sum = 0
         self._global_potential_points_sum = 0
         self._global_projected_gain_sum = 0
+        unplayed_gains = []
 
         aim_type_pcts = {}
         for lid, info in scenario_info.items():
@@ -294,6 +300,7 @@ class KovaaksAPI:
                     gain = e_val - expected_rank
                     self._global_projected_gain_sum += gain
                     row["_projected_gain"] = gain
+                    unplayed_gains.append(gain)
             except (ValueError, TypeError):
                 pass
 
@@ -384,6 +391,7 @@ class KovaaksAPI:
                 played_rows.append(r)
             else:
                 unplayed_rows.append(r)
+        self._unplayed_expected_gains = sorted(unplayed_gains, reverse=True)
         return played_rows, unplayed_rows
 
     # -------------------------------------------------------------------
@@ -518,10 +526,14 @@ class KovaaksAPI:
                             "points": next_points,
                             "timestamp": time.time()
                         }
-                        save_scores_cache(self._scores_cache)
+                        if not getattr(self, "_cache_corrupted", False):
+                            save_scores_cache(self._scores_cache)
                         diff = int(next_points - current_points)
                         if hasattr(self, 'window') and self.window:
                             self.window.evaluate_js(f"if(document.getElementById('stat-next-rank')) document.getElementById('stat-next-rank').textContent = '+{diff:,}';")
+                            unplayed_val = self.get_unplayed_left_to_next_rank()
+                            safe_unplayed = json.dumps(unplayed_val)
+                            self.window.evaluate_js(f"if(document.getElementById('stat-unplayed-left')) document.getElementById('stat-unplayed-left').textContent = {safe_unplayed};")
                 except Exception as e:
                     logger.warning("Background next rank fetch failed: %s", e)
 
@@ -550,6 +562,42 @@ class KovaaksAPI:
                 return "Rank 1!"
         except Exception as e:
             logger.warning("Error fetching next rank points: %s", e)
+            return "Error"
+
+    def get_unplayed_left_to_next_rank(self):
+        try:
+            current_points = getattr(self, '_global_points_sum', 0)
+            if current_points <= 0:
+                return "N/A"
+            username = self._cfg.get("username", "").strip()
+            if not username:
+                return "N/A"
+            
+            cached = self._scores_cache.get("next_rank", {})
+            cached_pts = cached.get("points")
+            cached_user = cached.get("username")
+            
+            if cached_user != username or not cached_pts:
+                return "N/A"
+                
+            diff = int(cached_pts - current_points)
+            if diff <= 0:
+                return "0"
+                
+            if not hasattr(self, '_unplayed_expected_gains') or not self._unplayed_expected_gains:
+                return "N/A"
+                
+            sum_gains = 0
+            count = 0
+            for gain in self._unplayed_expected_gains:
+                sum_gains += gain
+                count += 1
+                if sum_gains >= diff:
+                    return str(count)
+            
+            return f">{len(self._unplayed_expected_gains)}"
+        except Exception as e:
+            logger.warning("Error calculating unplayed scenarios left: %s", e)
             return "Error"
 
     def get_logs(self):
