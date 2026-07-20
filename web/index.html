@@ -37,8 +37,14 @@
                     <input type="text" id="search-input">
                 </div>
                 <div class="stats-container">
-                    <span>Next Rank: <span id="stat-next-rank">+0</span></span>
-                    <span>Scenarios to Next: <span id="stat-scenarios-left">N/A</span></span>
+                    <span class="tooltip-container">
+                        Next Rank: <span id="stat-next-rank" class="tooltip-trigger">+0</span>
+                        <span class="tooltip-content" id="next-rank-tooltip">
+                            <div class="tooltip-row"><strong>Scenarios to Next:</strong> <span id="stat-scenarios-left">Loading...</span></div>
+                            <div class="tooltip-row"><strong>Current Avg Percentile:</strong> <span id="stat-current-pct">Loading...</span></div>
+                            <div class="tooltip-row"><strong>Required Avg Percentile:</strong> <span id="stat-required-pct">Loading...</span></div>
+                        </span>
+                    </span>
                     <span>Points: <span id="stat-points">0</span></span>
                     <span>Potential Points: <span id="stat-potential">0</span></span>
                     <span id="stat-rows">0 rows</span>
