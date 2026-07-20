@@ -192,3 +192,21 @@ def mock_popular_page():
         ],
         "total": 2,
     }
+
+
+@pytest.fixture(autouse=True)
+def patch_production_paths(tmp_path, monkeypatch):
+    """Ensure tests never read or write the production scores cache or config."""
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    import kovaaks.cache as cache
+    import kovaaks.config_helpers as config_helpers
+    import kovaaks_web
+    
+    fake_cache_path = os.path.join(str(tmp_path), "scores_cache.json.gz")
+    fake_config_path = os.path.join(str(tmp_path), "config.json")
+    
+    monkeypatch.setattr(cache, "SCORES_CACHE", fake_cache_path)
+    monkeypatch.setattr(kovaaks_web, "SCORES_CACHE", fake_cache_path)
+    monkeypatch.setattr(config_helpers, "CONFIG_PATH", fake_config_path)
