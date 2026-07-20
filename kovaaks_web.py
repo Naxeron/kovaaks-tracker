@@ -70,7 +70,7 @@ class KovaaksAPI:
         self._filters = {}
         self._known_stat_files = set()
         self._jwt_token = None
-        self._unplayed_expected_gains = []
+        self._scenarios_expected_gains = []
         
         self._cache_loaded_event = threading.Event()
         if "pytest" in sys.modules:
@@ -205,7 +205,7 @@ class KovaaksAPI:
         self._global_points_sum = 0
         self._global_potential_points_sum = 0
         self._global_projected_gain_sum = 0
-        unplayed_gains = []
+        expected_gains = []
 
         aim_type_pcts = {}
         for lid, info in scenario_info.items():
@@ -295,12 +295,13 @@ class KovaaksAPI:
                     if gain > 0:
                         self._global_projected_gain_sum += gain
                         row["_projected_gain"] = gain
+                        expected_gains.append(gain)
                 else:
                     self._global_potential_points_sum += (e_val - 1)
                     gain = e_val - expected_rank
                     self._global_projected_gain_sum += gain
                     row["_projected_gain"] = gain
-                    unplayed_gains.append(gain)
+                    expected_gains.append(gain)
             except (ValueError, TypeError):
                 pass
 
@@ -391,7 +392,7 @@ class KovaaksAPI:
                 played_rows.append(r)
             else:
                 unplayed_rows.append(r)
-        self._unplayed_expected_gains = sorted(unplayed_gains, reverse=True)
+        self._scenarios_expected_gains = sorted(expected_gains, reverse=True)
         return played_rows, unplayed_rows
 
     # -------------------------------------------------------------------
@@ -531,9 +532,9 @@ class KovaaksAPI:
                         diff = int(next_points - current_points)
                         if hasattr(self, 'window') and self.window:
                             self.window.evaluate_js(f"if(document.getElementById('stat-next-rank')) document.getElementById('stat-next-rank').textContent = '+{diff:,}';")
-                            unplayed_val = self.get_unplayed_left_to_next_rank()
+                            unplayed_val = self.get_scenarios_left_to_next_rank()
                             safe_unplayed = json.dumps(unplayed_val)
-                            self.window.evaluate_js(f"if(document.getElementById('stat-unplayed-left')) document.getElementById('stat-unplayed-left').textContent = {safe_unplayed};")
+                            self.window.evaluate_js(f"if(document.getElementById('stat-scenarios-left')) document.getElementById('stat-scenarios-left').textContent = {safe_unplayed};")
                 except Exception as e:
                     logger.warning("Background next rank fetch failed: %s", e)
 
@@ -564,7 +565,7 @@ class KovaaksAPI:
             logger.warning("Error fetching next rank points: %s", e)
             return "Error"
 
-    def get_unplayed_left_to_next_rank(self):
+    def get_scenarios_left_to_next_rank(self):
         try:
             current_points = getattr(self, '_global_points_sum', 0)
             if current_points <= 0:
@@ -584,20 +585,20 @@ class KovaaksAPI:
             if diff <= 0:
                 return "0"
                 
-            if not hasattr(self, '_unplayed_expected_gains') or not self._unplayed_expected_gains:
+            if not hasattr(self, '_scenarios_expected_gains') or not self._scenarios_expected_gains:
                 return "N/A"
                 
             sum_gains = 0
             count = 0
-            for gain in self._unplayed_expected_gains:
+            for gain in self._scenarios_expected_gains:
                 sum_gains += gain
                 count += 1
                 if sum_gains >= diff:
                     return str(count)
             
-            return f">{len(self._unplayed_expected_gains)}"
+            return f">{len(self._scenarios_expected_gains)}"
         except Exception as e:
-            logger.warning("Error calculating unplayed scenarios left: %s", e)
+            logger.warning("Error calculating scenarios left: %s", e)
             return "Error"
 
     def get_logs(self):

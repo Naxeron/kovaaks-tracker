@@ -1024,12 +1024,12 @@ function renderTable() {
             document.getElementById('stat-points').textContent = currentData.global_stats.points.toLocaleString();
             document.getElementById('stat-potential').textContent = currentData.global_stats.potential_points.toLocaleString();
             document.getElementById('stat-next-rank').textContent = 'Loading...';
-            document.getElementById('stat-unplayed-left').textContent = 'Loading...';
+            document.getElementById('stat-scenarios-left').textContent = 'Loading...';
             if (window.pywebview && window.pywebview.api) {
                 window.pywebview.api.get_next_rank_points().then(res => {
                     document.getElementById('stat-next-rank').textContent = res;
-                    window.pywebview.api.get_unplayed_left_to_next_rank().then(unplayedRes => {
-                        document.getElementById('stat-unplayed-left').textContent = unplayedRes;
+                    window.pywebview.api.get_scenarios_left_to_next_rank().then(unplayedRes => {
+                        document.getElementById('stat-scenarios-left').textContent = unplayedRes;
                     });
                 });
             }
@@ -1049,7 +1049,7 @@ function renderTable() {
             document.getElementById('stat-points').textContent = pts.toLocaleString();
             document.getElementById('stat-potential').textContent = pot.toLocaleString();
             document.getElementById('stat-next-rank').textContent = "+?";
-            document.getElementById('stat-unplayed-left').textContent = "?";
+            document.getElementById('stat-scenarios-left').textContent = "?";
         }
         document.getElementById('stat-rows').textContent = filteredRows.length + ' rows';
     }
