@@ -785,7 +785,7 @@ class KovaaksAPI:
                             download_failed = True
 
                 if is_zombie or download_failed:
-                    if is_zombie and norm_name not in self._zombies:
+                    if norm_name not in self._zombies:
                         self._zombies.add(norm_name)
                         self._scores_cache["zombies"] = list(self._zombies)
                         save_scores_cache(self._scores_cache)
