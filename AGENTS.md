@@ -9,6 +9,7 @@ Implement or update automated tests for features, business logic, bugs.
 * **Test Location**: Put Python tests under `tests/` directory, filename prefix `test_`.
 * **Verification**: Run `pytest` before completion. Ensure tests pass. `pytest` only scans `tests/` via `pytest.ini` for headless, fast runs. Do not import `tkinter` or instantiate GUI widgets at module level in tests.
 * **Test Isolation**: Ensure tests never read or write production files. Any tests interacting with caches, configs, or stats must patch paths (such as `SCORES_CACHE` and `CONFIG_PATH`) to temporary test directories (e.g. `tmp_path`) to prevent side-effects on production data.
+* **Avoid Hanging Polling/Sleep Loops**: When background/daemon threads are forced to run synchronously in tests (e.g. using `SyncThread` or synchronous event dispatchers), ensure any polling, wait, or retry loops (such as checking if a download completes or an API status changes) have their conditions mocked to exit immediately. Otherwise, the main test thread will block on the `time.sleep` loop.
 
 ## 2. Code Quality & Idiomatic Python
 * Write clean Python. Prefer list comprehensions, generator expressions, built-ins over loops.
