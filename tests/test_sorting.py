@@ -68,3 +68,8 @@ class TestNaturalSortKey:
         key_lower = natural_sort_key("apple")
         key_upper = natural_sort_key("Apple")
         assert key_lower == key_upper
+
+    def test_date_string(self):
+        """Date strings like '2026-01-01' should be treated as plain strings, not numbers."""
+        key = natural_sort_key("2026-01-01")
+        assert key == (1, "2026-01-01")

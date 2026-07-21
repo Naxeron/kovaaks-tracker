@@ -871,21 +871,48 @@ function getFilteredAndSortedRows(includeZombies) {
     });
 
     if (sortCol !== -1) {
-        rows.sort((a, b) => {
-            let valA = a[sortCol];
-            let valB = b[sortCol];
-            
-            if (typeof valA === 'string' && typeof valB === 'string') {
-                const numA = parseFloat(valA.replace(/,/g, '').replace(/%/g, '').replace(/\+/g, ''));
-                const numB = parseFloat(valB.replace(/,/g, '').replace(/%/g, '').replace(/\+/g, ''));
-                if (!isNaN(numA) && !isNaN(numB)) {
-                    valA = numA;
-                    valB = numB;
+        const getSortKey = (val) => {
+            if (typeof val === 'number') {
+                return isNaN(val) ? { type: 2, val: "" } : { type: 0, val: val };
+            }
+            const s = String(val === null || val === undefined ? "" : val).trim();
+            if (!s) {
+                return { type: 2, val: "" };
+            }
+            let clean = s.replace(/,/g, '');
+            if (clean.endsWith('%')) {
+                clean = clean.slice(0, -1);
+            }
+            if (clean.startsWith('+')) {
+                clean = clean.slice(1);
+            }
+            const isNumeric = /^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(clean);
+            if (isNumeric) {
+                const num = parseFloat(clean);
+                if (!isNaN(num)) {
+                    return { type: 0, val: num };
                 }
             }
+            return { type: 1, val: s.toLowerCase() };
+        };
 
-            if (valA < valB) return sortAsc ? -1 : 1;
-            if (valA > valB) return sortAsc ? 1 : -1;
+        rows.sort((a, b) => {
+            const keyA = getSortKey(a[sortCol]);
+            const keyB = getSortKey(b[sortCol]);
+
+            // Empty values (type 2) always go to the bottom
+            if (keyA.type === 2 && keyB.type !== 2) return 1;
+            if (keyB.type === 2 && keyA.type !== 2) return -1;
+            if (keyA.type === 2 && keyB.type === 2) return 0;
+
+            // If different types (numbers vs strings), numbers sort before strings
+            if (keyA.type !== keyB.type) {
+                return sortAsc ? (keyA.type - keyB.type) : (keyB.type - keyA.type);
+            }
+
+            // Same type comparison
+            if (keyA.val < keyB.val) return sortAsc ? -1 : 1;
+            if (keyA.val > keyB.val) return sortAsc ? 1 : -1;
             return 0;
         });
     }
