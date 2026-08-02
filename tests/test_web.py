@@ -690,5 +690,78 @@ def test_auto_refresh_timer_prevents_redundant_resets():
     assert "currentAutoRefreshState.interval === interval" in js_content
 
 
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+def test_get_stats_dir_default_fallback(mock_polling, mock_load_cache, mock_load_config):
+    mock_load_config.return_value = {}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    stats_dir = api._get_stats_dir()
+    assert len(stats_dir) > 0
+    assert "FPSAimTrainer" in stats_dir or "stats" in stats_dir
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks_web.save_scores_cache")
+@patch("threading.Thread")
+def test_stats_file_handler_events(mock_thread, mock_save_cache, mock_polling, mock_load_cache, mock_load_config, tmp_path):
+    mock_load_config.return_value = {"stats_dir": str(tmp_path)}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    
+    with patch("watchdog.observers.Observer") as mock_observer_cls:
+        mock_observer = MagicMock()
+        mock_observer_cls.return_value = mock_observer
+        api._start_file_watcher()
+        
+        assert mock_observer.schedule.called
+        handler = mock_observer.schedule.call_args[0][0]
+        
+        # Test created event
+        event_created = MagicMock()
+        event_created.is_directory = False
+        event_created.src_path = str(tmp_path / "1w6ts - Challenge - 2026.07.31 Stats.csv")
+        handler.on_created(event_created)
+        assert "1w6ts - Challenge - 2026.07.31 Stats.csv" in api._known_stat_files
+
+        # Test modified event
+        event_modified = MagicMock()
+        event_modified.is_directory = False
+        event_modified.src_path = str(tmp_path / "Pasu - Challenge - 2026.07.31 Stats.csv")
+        handler.on_modified(event_modified)
+        assert "Pasu - Challenge - 2026.07.31 Stats.csv" in api._known_stat_files
+
+        # Test moved event
+        event_moved = MagicMock()
+        event_moved.is_directory = False
+        event_moved.dest_path = str(tmp_path / "Bounce - Challenge - 2026.07.31 Stats.csv")
+        handler.on_moved(event_moved)
+        assert "Bounce - Challenge - 2026.07.31 Stats.csv" in api._known_stat_files
+
+
+@patch("kovaaks_web.load_config")
+@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks_web.KovaaksAPI._start_file_watcher")
+@patch("kovaaks.config_helpers.save_config")
+@patch("kovaaks_web.save_scores_cache")
+def test_save_settings_restarts_watcher(
+    mock_save_cache, mock_save_config, mock_start_watcher, mock_load_cache, mock_load_config
+):
+    mock_load_config.return_value = {"stats_dir": "/old/dir"}
+    mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
+
+    api = KovaaksAPI()
+    mock_start_watcher.reset_mock()
+
+    api.save_settings({"stats_dir": "/new/dir"})
+    mock_start_watcher.assert_called_once()
+
+
+
 
 
