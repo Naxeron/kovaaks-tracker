@@ -71,6 +71,7 @@ class KovaaksAPI:
         self._known_stat_files = set()
         self._jwt_token = None
         self._scenarios_expected_gains = []
+        self._watcher_observer = None
         
         self._cache_loaded_event = threading.Event()
         if "pytest" in sys.modules:
@@ -115,7 +116,11 @@ class KovaaksAPI:
             threading.Thread(target=start_polling_bg, daemon=True).start()
 
     def _get_stats_dir(self):
-        return self._cfg.get("stats_dir", "")
+        from kovaaks.config_helpers import get_default_stats_dir
+        stats_dir = self._cfg.get("stats_dir")
+        if not stats_dir:
+            stats_dir = get_default_stats_dir()
+        return os.path.expanduser(stats_dir) if stats_dir else ""
         
     def _update_status(self, msg):
         logger.info(msg)
@@ -698,7 +703,7 @@ class KovaaksAPI:
         if old_stats_dir != new_stats_dir:
             self._known_stat_files.clear()
             stats_dir = self._get_stats_dir()
-            if os.path.exists(stats_dir):
+            if stats_dir and os.path.exists(stats_dir):
                 try:
                     self._known_stat_files.update(f for f in os.listdir(stats_dir) if f.endswith(" Stats.csv"))
                 except OSError:
@@ -706,6 +711,7 @@ class KovaaksAPI:
             self._scores_cache["known_stat_files"] = list(self._known_stat_files)
             save_scores_cache(self._scores_cache)
             self._local_stats_dirty = True
+            self._start_file_watcher()
 
     def save_credentials(self, username, password):
         from kovaaks.config_helpers import save_config
@@ -893,14 +899,12 @@ class KovaaksAPI:
 
     def _start_stats_polling(self):
         stats_dir = self._get_stats_dir()
-        if os.path.exists(stats_dir):
+        if stats_dir and os.path.exists(stats_dir):
             try:
                 current_files = set(f for f in os.listdir(stats_dir) if f.endswith(" Stats.csv"))
-                if "known_stat_files" in self._scores_cache:
-                    cached_known = set(self._scores_cache["known_stat_files"])
-                    new_files = current_files - cached_known
-                else:
-                    new_files = set()
+                cached_known_raw = self._scores_cache.get("known_stat_files")
+                cached_known = set(cached_known_raw) if cached_known_raw is not None else set()
+                new_files = current_files - cached_known
                 
                 self._known_stat_files = current_files
                 self._scores_cache["known_stat_files"] = list(self._known_stat_files)
@@ -913,15 +917,32 @@ class KovaaksAPI:
                         args=(stats_dir, new_files),
                         daemon=True
                     ).start()
-            except OSError:
-                pass
+            except Exception as e:
+                logger.warning("Error scanning initial stats directory '%s': %s", stats_dir, e)
+        elif stats_dir:
+            logger.warning("Stats directory does not exist: %s", stats_dir)
+        else:
+            logger.warning("No stats directory configured or default path found.")
         
         self._start_file_watcher()
 
     def _start_file_watcher(self):
         """Start a watchdog-based file watcher for near-instant detection (~10ms).
         Falls back to mtime-based polling (250ms) if watchdog is unavailable."""
+        if getattr(self, "_watcher_observer", None) is not None:
+            try:
+                self._watcher_observer.stop()
+                self._watcher_observer.join(timeout=1.0)
+            except Exception as e:
+                logger.debug("Error stopping previous watchdog observer: %s", e)
+            self._watcher_observer = None
+
         stats_dir = self._get_stats_dir()
+        if not stats_dir or not os.path.exists(stats_dir):
+            logger.warning("Stats watcher: directory '%s' does not exist; fallback polling active.", stats_dir)
+            threading.Thread(target=self._poll_stats_loop, daemon=True).start()
+            return
+
         try:
             from watchdog.observers import Observer
             from watchdog.events import FileSystemEventHandler
@@ -929,10 +950,10 @@ class KovaaksAPI:
             api_ref = self
 
             class StatsFileHandler(FileSystemEventHandler):
-                def on_created(self, event):
-                    if event.is_directory:
+                def _process_path(self, path):
+                    if not path:
                         return
-                    fname = os.path.basename(event.src_path)
+                    fname = os.path.basename(path)
                     if not fname.endswith(" Stats.csv"):
                         return
                     if fname in api_ref._known_stat_files:
@@ -954,20 +975,32 @@ class KovaaksAPI:
                         daemon=True
                     ).start()
 
-            if stats_dir and os.path.exists(stats_dir):
-                observer = Observer()
-                observer.schedule(StatsFileHandler(), stats_dir, recursive=False)
-                observer.daemon = True
-                observer.start()
-                logger.info("Stats watcher: using watchdog/inotify for instant detection")
-                return
+                def on_created(self, event):
+                    if not event.is_directory:
+                        self._process_path(event.src_path)
+
+                def on_modified(self, event):
+                    if not event.is_directory:
+                        self._process_path(event.src_path)
+
+                def on_moved(self, event):
+                    if not event.is_directory:
+                        self._process_path(getattr(event, "dest_path", event.src_path))
+
+            observer = Observer()
+            observer.schedule(StatsFileHandler(), stats_dir, recursive=False)
+            observer.daemon = True
+            observer.start()
+            self._watcher_observer = observer
+            logger.info("Stats watcher: using watchdog/inotify for instant detection on '%s'", stats_dir)
+            return
         except ImportError:
             pass
         except Exception as e:
             logger.debug("Watchdog observer failed, falling back to polling: %s", e)
 
         # Fallback: mtime-based polling loop
-        logger.info("Stats watcher: using mtime polling (250ms interval)")
+        logger.info("Stats watcher: using mtime polling (250ms interval) on '%s'", stats_dir)
         threading.Thread(target=self._poll_stats_loop, daemon=True).start()
 
     def _poll_stats_loop(self):
