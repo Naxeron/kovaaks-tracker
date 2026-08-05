@@ -524,6 +524,7 @@ class KovaaksAPI:
             
             cached = self._scores_cache.get("next_rank", {})
             cached_pts = cached.get("points")
+            cached_user_pts = cached.get("user_official_points")
             cached_user = cached.get("username")
             cached_time = cached.get("timestamp", 0)
             
@@ -533,48 +534,66 @@ class KovaaksAPI:
             def fetch_and_update():
                 try:
                     import kovaaks.api as api
-                    next_points = api.get_next_leaderboard_position_points(username, current_points)
-                    if next_points and next_points > current_points:
+                    res = api.get_next_leaderboard_position_points(username, current_points)
+                    next_points = res.get("next_points") if isinstance(res, dict) else res
+                    user_off_pts = res.get("user_official_points") if isinstance(res, dict) else None
+                    
+                    if next_points and (user_off_pts is None or next_points >= user_off_pts):
                         self._scores_cache["next_rank"] = {
                             "username": username,
                             "points": next_points,
+                            "user_official_points": user_off_pts,
                             "timestamp": time.time()
                         }
                         if not getattr(self, "_cache_corrupted", False):
                             save_scores_cache(self._scores_cache)
-                        diff = int(next_points - current_points)
+                        
+                        base_pts = user_off_pts if user_off_pts is not None else current_points
+                        diff = int(next_points - base_pts)
+                        display_str = f"+{diff:,}" if diff > 0 else "Rank 1!"
+                        
                         if hasattr(self, 'window') and self.window:
-                            self.window.evaluate_js(f"if(document.getElementById('stat-next-rank')) document.getElementById('stat-next-rank').textContent = '+{diff:,}';")
+                            self.window.evaluate_js(f"if(document.getElementById('stat-next-rank')) document.getElementById('stat-next-rank').textContent = {json.dumps(display_str)};")
                             val_dict = self.get_scenarios_left_to_next_rank()
                             self.window.evaluate_js(f"""
                                 if(document.getElementById('stat-scenarios-left')) document.getElementById('stat-scenarios-left').textContent = {json.dumps(val_dict.get('count'))};
+                                if(document.getElementById('stat-live-gap')) document.getElementById('stat-live-gap').textContent = {json.dumps(val_dict.get('live_gap'))};
                                 if(document.getElementById('stat-current-pct')) document.getElementById('stat-current-pct').textContent = {json.dumps(val_dict.get('global_avg_pct'))};
                                 if(document.getElementById('stat-required-pct')) document.getElementById('stat-required-pct').textContent = {json.dumps(val_dict.get('required_avg_pct'))};
                             """)
                 except Exception as e:
                     logger.warning("Background next rank fetch failed: %s", e)
 
-            # If cache is valid for this user and current points
-            if cached_user == username and cached_pts and cached_pts > current_points:
+            # If cache is valid for this user and official user points are cached
+            if cached_user == username and cached_pts and cached_user_pts is not None:
+                base_pts = cached_user_pts if cached_user_pts is not None else current_points
+                diff = int(cached_pts - base_pts)
+                if diff <= 0:
+                    return "Rank 1!"
+                
                 # Refresh in background if older than 1 hour to keep threshold reasonably fresh
                 if now - cached_time > 3600:
                     import threading
                     threading.Thread(target=fetch_and_update, daemon=True).start()
-                diff = int(cached_pts - current_points)
                 return f"+{diff:,}"
 
-            # Cache miss or user surpassed the old cached threshold, fetch synchronously
+            # Cache miss or invalid, fetch synchronously
             import kovaaks.api as api
-            next_points = api.get_next_leaderboard_position_points(username, current_points)
-            if next_points and next_points > current_points:
+            res = api.get_next_leaderboard_position_points(username, current_points)
+            next_points = res.get("next_points") if isinstance(res, dict) else res
+            user_off_pts = res.get("user_official_points") if isinstance(res, dict) else None
+            
+            if next_points:
                 self._scores_cache["next_rank"] = {
                     "username": username,
                     "points": next_points,
+                    "user_official_points": user_off_pts,
                     "timestamp": now
                 }
                 save_scores_cache(self._scores_cache)
-                diff = int(next_points - current_points)
-                return f"+{diff:,}"
+                base_pts = user_off_pts if user_off_pts is not None else current_points
+                diff = int(next_points - base_pts)
+                return f"+{diff:,}" if diff > 0 else "Rank 1!"
             else:
                 return "Rank 1!"
         except Exception as e:
@@ -585,28 +604,29 @@ class KovaaksAPI:
         try:
             current_points = getattr(self, '_global_points_sum', 0)
             if current_points <= 0:
-                return {"count": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
+                return {"count": "N/A", "live_gap": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
             username = self._cfg.get("username", "").strip()
             if not username:
-                return {"count": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
+                return {"count": "N/A", "live_gap": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
             
             cached = self._scores_cache.get("next_rank", {})
             cached_pts = cached.get("points")
             cached_user = cached.get("username")
             
             if cached_user != username or not cached_pts:
-                return {"count": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
+                return {"count": "N/A", "live_gap": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
                 
             diff = int(cached_pts - current_points)
+            live_gap_str = f"+{diff:,}" if diff > 0 else "+0"
             
             global_avg_pct_val = getattr(self, '_global_avg_pct', 0.0)
             global_avg_pct_str = f"{global_avg_pct_val:.2f}%"
             
             if diff <= 0:
-                return {"count": "0", "global_avg_pct": global_avg_pct_str, "required_avg_pct": "0.00%"}
+                return {"count": "0", "live_gap": live_gap_str, "global_avg_pct": global_avg_pct_str, "required_avg_pct": "0.00%"}
                 
             if not hasattr(self, '_scenarios_expected_gains') or not self._scenarios_expected_gains:
-                return {"count": "N/A", "global_avg_pct": global_avg_pct_str, "required_avg_pct": "N/A"}
+                return {"count": "N/A", "live_gap": live_gap_str, "global_avg_pct": global_avg_pct_str, "required_avg_pct": "N/A"}
                 
             sum_gains = 0
             count = 0
@@ -634,12 +654,13 @@ class KovaaksAPI:
                 
             return {
                 "count": count_str,
+                "live_gap": live_gap_str,
                 "global_avg_pct": global_avg_pct_str,
                 "required_avg_pct": required_pct_str
             }
         except Exception as e:
-            logger.warning("Error calculating scenarios left: %s", e)
-            return {"count": "Error", "global_avg_pct": "Error", "required_avg_pct": "Error"}
+            logger.warning("Error calculating scenarios left to next rank: %s", e)
+            return {"count": "N/A", "live_gap": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
 
     def get_logs(self):
         log_file = "kovaaks.log"
