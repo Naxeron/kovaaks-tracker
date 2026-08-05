@@ -1051,6 +1051,7 @@ function renderTable() {
             document.getElementById('stat-points').textContent = currentData.global_stats.points.toLocaleString();
             document.getElementById('stat-potential').textContent = currentData.global_stats.potential_points.toLocaleString();
             document.getElementById('stat-next-rank').textContent = 'Loading...';
+            if (document.getElementById('stat-live-gap')) document.getElementById('stat-live-gap').textContent = 'Loading...';
             document.getElementById('stat-scenarios-left').textContent = 'Loading...';
             document.getElementById('stat-current-pct').textContent = 'Loading...';
             document.getElementById('stat-required-pct').textContent = 'Loading...';
@@ -1059,10 +1060,12 @@ function renderTable() {
                     document.getElementById('stat-next-rank').textContent = res;
                     window.pywebview.api.get_scenarios_left_to_next_rank().then(valDict => {
                         if (valDict && typeof valDict === 'object') {
+                            if (document.getElementById('stat-live-gap')) document.getElementById('stat-live-gap').textContent = valDict.live_gap || 'N/A';
                             document.getElementById('stat-scenarios-left').textContent = valDict.count || 'N/A';
                             document.getElementById('stat-current-pct').textContent = valDict.global_avg_pct || 'N/A';
                             document.getElementById('stat-required-pct').textContent = valDict.required_avg_pct || 'N/A';
                         } else {
+                            if (document.getElementById('stat-live-gap')) document.getElementById('stat-live-gap').textContent = 'N/A';
                             document.getElementById('stat-scenarios-left').textContent = valDict || 'N/A';
                             document.getElementById('stat-current-pct').textContent = 'N/A';
                             document.getElementById('stat-required-pct').textContent = 'N/A';
@@ -1086,6 +1089,7 @@ function renderTable() {
             document.getElementById('stat-points').textContent = pts.toLocaleString();
             document.getElementById('stat-potential').textContent = pot.toLocaleString();
             document.getElementById('stat-next-rank').textContent = "+?";
+            if (document.getElementById('stat-live-gap')) document.getElementById('stat-live-gap').textContent = "?";
             document.getElementById('stat-scenarios-left').textContent = "?";
             document.getElementById('stat-current-pct').textContent = "?";
             document.getElementById('stat-required-pct').textContent = "?";

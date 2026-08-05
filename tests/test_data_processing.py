@@ -240,16 +240,17 @@ class TestRebuildDataRows:
         
         # 3. Successful fetch with next points > current points
         app._cfg["username"] = "player1"
-        mock_get_points.return_value = 5500
+        mock_get_points.return_value = {"next_points": 5500, "user_official_points": 5000}
         assert app.get_next_rank_points() == "+500"
         mock_get_points.assert_called_with("player1", 5000)
         
         # 4. Rank 1 (next points <= current points)
         app._scores_cache.clear()
-        mock_get_points.return_value = 4500
+        mock_get_points.return_value = {"next_points": 4500, "user_official_points": 4500}
         assert app.get_next_rank_points() == "Rank 1!"
         
         # 5. Exception handled
+        app._scores_cache.clear()
         mock_get_points.side_effect = Exception("API error")
         assert app.get_next_rank_points() == "Error"
 
@@ -269,43 +270,43 @@ class TestRebuildDataRows:
         app = KovaaksAPIStub()
 
         # 1. Zero points
-        assert app.get_scenarios_left_to_next_rank() == {"count": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
+        assert app.get_scenarios_left_to_next_rank() == {"count": "N/A", "live_gap": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
 
         # 2. No username
         app._global_points_sum = 1000
-        assert app.get_scenarios_left_to_next_rank() == {"count": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
+        assert app.get_scenarios_left_to_next_rank() == {"count": "N/A", "live_gap": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
 
         # 3. No cached next_rank / mismatched user
         app._cfg["username"] = "player1"
-        assert app.get_scenarios_left_to_next_rank() == {"count": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
+        assert app.get_scenarios_left_to_next_rank() == {"count": "N/A", "live_gap": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
 
         app._scores_cache["next_rank"] = {
             "username": "different_player",
             "points": 1500
         }
-        assert app.get_scenarios_left_to_next_rank() == {"count": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
+        assert app.get_scenarios_left_to_next_rank() == {"count": "N/A", "live_gap": "N/A", "global_avg_pct": "N/A", "required_avg_pct": "N/A"}
 
         # 4. Cache exists but next points <= current points
         app._scores_cache["next_rank"] = {
             "username": "player1",
             "points": 1000
         }
-        assert app.get_scenarios_left_to_next_rank() == {"count": "0", "global_avg_pct": "75.00%", "required_avg_pct": "0.00%"}
+        assert app.get_scenarios_left_to_next_rank() == {"count": "0", "live_gap": "+0", "global_avg_pct": "75.00%", "required_avg_pct": "0.00%"}
 
         # 5. Normal case where diff is met
         app._scores_cache["next_rank"]["points"] = 1500  # diff = 500
         app._scenarios_expected_gains = [300, 200, 100]
-        assert app.get_scenarios_left_to_next_rank() == {"count": "2", "global_avg_pct": "75.00%", "required_avg_pct": "70.00%"}
+        assert app.get_scenarios_left_to_next_rank() == {"count": "2", "live_gap": "+500", "global_avg_pct": "75.00%", "required_avg_pct": "70.00%"}
 
         # 6. Diff met by exceeding
         app._scores_cache["next_rank"]["points"] = 1450  # diff = 450
-        assert app.get_scenarios_left_to_next_rank() == {"count": "2", "global_avg_pct": "75.00%", "required_avg_pct": "65.00%"}
+        assert app.get_scenarios_left_to_next_rank() == {"count": "2", "live_gap": "+450", "global_avg_pct": "75.00%", "required_avg_pct": "65.00%"}
 
         # 7. All scenarios are not enough (required avg pct > 100%)
         app._scores_cache["next_rank"]["points"] = 2000  # diff = 1000
-        assert app.get_scenarios_left_to_next_rank() == {"count": ">3", "global_avg_pct": "75.00%", "required_avg_pct": ">100%"}
+        assert app.get_scenarios_left_to_next_rank() == {"count": ">3", "live_gap": "+1,000", "global_avg_pct": "75.00%", "required_avg_pct": ">100%"}
 
         # 8. Exact match at 0 diff
         app._scores_cache["next_rank"]["points"] = 1000  # diff = 0
-        assert app.get_scenarios_left_to_next_rank() == {"count": "0", "global_avg_pct": "75.00%", "required_avg_pct": "0.00%"}
+        assert app.get_scenarios_left_to_next_rank() == {"count": "0", "live_gap": "+0", "global_avg_pct": "75.00%", "required_avg_pct": "0.00%"}
 

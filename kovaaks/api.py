@@ -236,28 +236,38 @@ def _get_pts(item, default=0):
         return default
 
 def get_next_leaderboard_position_points(username, local_points, session=None):
-    """Finds the score of the player strictly above the user's score on the global leaderboard."""
+    """Finds the score of the player strictly above the user's score on the global leaderboard,
+    returning a dict with 'next_points' and 'user_official_points'.
+    """
     url = "https://kovaaks.com/webapp-backend/leaderboard/global/scores"
+    user_lower = username.lower()
     
     # 1. Quick check on the first page (top 100)
     try:
         if resp := api_request_with_retry("get", url, params={"page": 0, "max": 100}, max_retries=3, session=session):
             items = resp.json().get("data", [])
-            user_lower = username.lower()
             for i, item in enumerate(items):
                 if user_lower in (item.get("webappUsername", "").lower(), item.get("steamAccountName", "").lower()):
-                    return _get_pts(items[i-1], local_points) if i > 0 else local_points
+                    user_pts = _get_pts(item, local_points)
+                    next_pts = _get_pts(items[i-1], user_pts) if i > 0 else user_pts
+                    return {
+                        "next_points": next_pts,
+                        "user_official_points": user_pts
+                    }
             if items and local_points >= _get_pts(items[0], 0):
-                return local_points
+                return {
+                    "next_points": _get_pts(items[0], local_points),
+                    "user_official_points": local_points
+                }
     except Exception as e:
         logger.warning("Failed to fetch top 100 for global leaderboard: %s", e)
 
-    # 2. Binary search to find the minimum score strictly greater than local_points
+    # 2. Binary search to locate user's page and exact preceding player's score
     try:
         if resp := api_request_with_retry("get", url, params={"page": 0, "max": 100}, max_retries=3, session=session):
             total_players = resp.json().get("total", 0)
             if total_players == 0:
-                return local_points
+                return {"next_points": local_points, "user_official_points": None}
             
             low, high = 0, total_players // 100
             target_points, best_points_above = local_points, None
@@ -269,6 +279,29 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
                 items = resp.json().get("data", [])
                 if not items:
                     break
+                
+                # Check if user is on this page
+                for i, it in enumerate(items):
+                    if user_lower in (it.get("webappUsername", "").lower(), it.get("steamAccountName", "").lower()):
+                        user_pts = _get_pts(it, local_points)
+                        if i > 0:
+                            next_pts = _get_pts(items[i-1], user_pts)
+                        else:
+                            # Fetch last entry of previous page if user is rank 1 on this page
+                            next_pts = None
+                            try:
+                                if mid > 0 and (prev_resp := api_request_with_retry("get", url, params={"page": mid - 1, "max": 100}, max_retries=3, session=session)):
+                                    prev_items = prev_resp.json().get("data", [])
+                                    if prev_items:
+                                        next_pts = _get_pts(prev_items[-1], user_pts)
+                            except Exception:
+                                pass
+                            if next_pts is None:
+                                next_pts = user_pts
+                        return {
+                            "next_points": next_pts,
+                            "user_official_points": user_pts
+                        }
                     
                 first_score_on_page = _get_pts(items[0], 0)
                 last_score_on_page = _get_pts(items[-1], 0)
@@ -286,12 +319,12 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
                     high = mid - 1
                     
             if best_points_above is not None:
-                return best_points_above
+                return {"next_points": best_points_above, "user_official_points": None}
     except Exception as e:
         logger.warning("Failed during binary search of global leaderboard: %s", e)
         raise
 
-    return local_points
+    return {"next_points": local_points, "user_official_points": None}
 
 
 def is_scenario_downloaded(name, stats_dir):
