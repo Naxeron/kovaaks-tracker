@@ -69,6 +69,13 @@ The scheduled workflow refreshes these two assets in place, without committing
 generated files to the repository. Unchanged datasets are not uploaded again.
 Scenario history retains up to 168 hourly samples.
 
+The local scores cache shares timestamps and packs history counts to reduce
+memory use. Existing caches load automatically and switch formats on the next
+normal cache save. The first load of an old cache can still reach its previous
+memory peak; restarting after that save gives the smaller startup footprint.
+Tools reading local history should use `kovaaks.cache.load_scores_cache()` to
+handle both formats. The downloaded release datasets keep their existing format.
+
 If downloads fail, the tracker can fetch scenarios directly from the KovaaKs API.
 If neither source returns scenarios, it keeps the previous cache. Update older
 tracker checkouts to use release downloads; their former raw GitHub URLs will no

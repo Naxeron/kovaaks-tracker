@@ -19,6 +19,7 @@ from kovaaks.constants import MIN_ENTRIES
 from kovaaks.config_helpers import load_config
 from kovaaks import credentials
 from kovaaks.cache import CacheWriter, load_scores_cache, load_scenarios_from_cache, save_scores_cache, SCORES_CACHE
+from kovaaks.history import CompactHistory
 from kovaaks.scoring import calculate_potential_score, prune_entry_history
 from kovaaks.stats import get_local_stats as _get_local_stats
 from kovaaks.fetch_worker import run_fetch_all
@@ -621,7 +622,9 @@ class KovaaksAPI:
                 entries = int(s.get("counts", {}).get("entries", 0))
             except (ValueError, TypeError):
                 continue
-            lid_history = history.setdefault(lid, {})
+            lid_history = history.get(lid)
+            if lid_history is None:
+                lid_history = history[lid] = CompactHistory()
             if lid_history:
                 latest_key = max(lid_history.keys())
                 try:

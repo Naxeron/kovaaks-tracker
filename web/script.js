@@ -17,6 +17,7 @@ let searchRenderTimer = null;
 let sortKeyData = null;
 let sortKeyRows = null;
 let sortKeyColumns = null;
+let sortKeyColumn = null;
 let sortKeyCache = new Map();
 let activeDataFetch = null;
 let dataRefreshQueued = false;
@@ -961,6 +962,7 @@ async function fetchDataOnce() {
 
             const showHidden = document.getElementById('toggle-hidden').classList.contains('active');
             currentData = await window.pywebview.api.get_data(cfg.min_entries || 1000, showHidden);
+            resetSortKeyCache();
             window.zombies = new Set(currentData.zombies || []);
             if (cfg.username && !initialFetchTriggered) {
                 initialFetchTriggered = true;
@@ -988,6 +990,7 @@ async function fetchDataOnce() {
             ],
             global_stats: { points: 1000, potential_points: 2000, projected_gain: 500, total_rows: 2 }
         };
+        resetSortKeyCache();
         renderTable();
         refreshGlobalRankStats();
     }
@@ -1049,19 +1052,29 @@ function getSortKey(val) {
     return { type: 1, val: s.toLowerCase() };
 }
 
+function resetSortKeyCache() {
+    sortKeyData = null;
+    sortKeyRows = null;
+    sortKeyColumns = null;
+    sortKeyColumn = null;
+    sortKeyCache = new Map();
+}
+
 function getColumnSortKeys(column) {
     if (sortKeyData !== currentData || sortKeyRows !== currentData.rows ||
-            sortKeyColumns !== currentData.columns) {
+            sortKeyColumns !== currentData.columns || sortKeyColumn !== column) {
         sortKeyData = currentData;
         sortKeyRows = currentData.rows;
         sortKeyColumns = currentData.columns;
+        sortKeyColumn = column;
+        // Keep only the active column's keys so exploring columns does not
+        // retain a separate key object and map entry for every cell.
         sortKeyCache = new Map();
+        for (const row of currentData.rows) {
+            sortKeyCache.set(row, getSortKey(row[column]));
+        }
     }
-    if (!sortKeyCache.has(column)) {
-        sortKeyCache.set(column, new Map(currentData.rows.map(row =>
-            [row, getSortKey(row[column])])));
-    }
-    return sortKeyCache.get(column);
+    return sortKeyCache;
 }
 
 function getFilteredAndSortedRows(includeZombies) {

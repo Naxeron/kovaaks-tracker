@@ -19,6 +19,7 @@ from .api import (
     kovaaks_get_friends_scores,
 )
 from .cache import save_scores_cache
+from .history import CompactHistory
 from .config_helpers import save_config
 from .scoring import prune_entry_history
 from .data_processing import (
@@ -162,6 +163,28 @@ def fetch_gzip_json_from_github(filename, app):
     return None
 
 
+def _bounded_score_futures(executor, function, items, session, stop_check, max_pending):
+    """Keep a small window of queued requests instead of retaining every Future."""
+    items = iter(items)
+    pending = set()
+    exhausted = False
+    while not stop_check():
+        while not exhausted and len(pending) < max_pending and not stop_check():
+            try:
+                item = next(items)
+            except StopIteration:
+                exhausted = True
+                break
+            pending.add(executor.submit(function, item, session))
+        if not pending or stop_check():
+            return
+        # Rebuilding this iterator covers only the small pending window. It also
+        # lets newly submitted requests finish before older, slower requests.
+        future = next(concurrent.futures.as_completed(pending))
+        pending.remove(future)
+        yield future
+
+
 def run_fetch_all(app, username, password, silent=False):
     """Background worker that fetches all scenarios and updates the GUI state."""
     app._fetch_in_progress = True
@@ -231,11 +254,16 @@ def run_fetch_all(app, username, password, silent=False):
                     merged_count = 0
                     total_items = len(h_data)
                     for idx, (lid, counts) in enumerate(h_data.items()):
-                        lid_hist = local_history.setdefault(str(lid), {})
-                        for i, count in enumerate(counts):
-                            if count is not None and i < len(h_ts) and h_ts[i] not in lid_hist:
-                                lid_hist[h_ts[i]] = count
-                                merged_count += 1
+                        lid_hist = local_history.get(str(lid))
+                        if lid_hist is None:
+                            lid_hist = local_history[str(lid)] = CompactHistory()
+                        additions = {}
+                        for stamp, count in zip(h_ts, counts):
+                            if count is not None and stamp not in lid_hist:
+                                additions.setdefault(stamp, count)
+                        if additions:
+                            lid_hist.update(additions)
+                            merged_count += len(additions)
                         if idx % 1000 == 0:
                             progress = 0.05 + 0.05 * (idx / total_items if total_items > 0 else 0)
                             app._update_progress(progress, 1.0)
@@ -244,6 +272,9 @@ def run_fetch_all(app, username, password, silent=False):
                     cache_changed = prune_entry_history(local_history) or cache_changed
                     mark_dataset_applied(app, "scenarios_history.json.gz")
 
+        # The merged cache now owns the required samples. Do not retain the
+        # downloaded matrix or its final row throughout a long score refresh.
+        ext_history = h_ts = h_data = counts = additions = None
         app._update_progress(0.10, 1.0)
 
         if not all_scenarios:
@@ -336,19 +367,12 @@ def run_fetch_all(app, username, password, silent=False):
             finish(False, silent=silent, msg=f"Done (Scenario list updated) — {len(master)} scenarios.")
             return
 
-        all_lids = list(scenario_info.keys())
-        name_to_lid = {info["name"]: lid for lid, info in scenario_info.items()}
+        del master
         with data_lock:
-            newly_played_names = scores_cache.pop("newly_played_scenarios", [])
-            cache_changed = bool(newly_played_names) or cache_changed
-        newly_played_lids = {name_to_lid[name] for name in newly_played_names if name in name_to_lid}
-        
-        local_stats_cache = scores_cache.get("local_stats", {})
-        
-        work_items = all_lids
+            cache_changed = bool(scores_cache.pop("newly_played_scenarios", [])) or cache_changed
 
-        total_to_fetch = len(work_items)
-        cached_count = len(all_lids) - total_to_fetch
+        total_to_fetch = len(scenario_info)
+        cached_count = 0
 
         if total_to_fetch == 0:
             finish(False, silent=silent)
@@ -439,8 +463,12 @@ def run_fetch_all(app, username, password, silent=False):
             pool_connections=API_FETCH_WORKERS, pool_maxsize=API_FETCH_WORKERS))
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=API_FETCH_WORKERS)
         try:
-            futures = [executor.submit(_fetch_one, lid, session) for lid in work_items]
-            for future in concurrent.futures.as_completed(futures):
+            futures = _bounded_score_futures(
+                executor, _fetch_one, scenario_info, session,
+                lambda: session_expired or _is_cancelled(),
+                max_pending=2 * API_FETCH_WORKERS,
+            )
+            for future in futures:
                 if _is_cancelled():
                     break
         finally:

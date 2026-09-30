@@ -103,7 +103,7 @@ def run_browser_test(source):
     assert result.stdout == "ok"
 
 
-def test_sort_order_cache_reuse_and_dataset_invalidation():
+def test_sort_order_active_column_cache_and_dataset_invalidation():
     run_browser_test(r"""
         const values = ['10', '2', '-3.5', '+4.25%', '1,234', 'Alpha', 'beta',
             '', null, undefined, NaN, 5, '  ', 'alpha', '2026-01-01', '-0.5',
@@ -129,14 +129,19 @@ def test_sort_order_cache_reuse_and_dataset_invalidation():
         assert.strictEqual(keyCalls, 2 * values.length);
         sortCol = 1;
         names();
-        assert.strictEqual(keyCalls, 2 * values.length);
+        // Returning to an older column rebuilds its evicted keys; repeated
+        // sorting/searching within that active column still reuses them.
+        assert.strictEqual(keyCalls, 3 * values.length);
+        sortAsc = true;
+        assert.strictEqual(names(), '5,13');
+        assert.strictEqual(keyCalls, 3 * values.length);
         document.getElementById('search-input').value = '';
         currentData = data('new dataset');
         assert.strictEqual(names(), 'new dataset');
-        assert.strictEqual(keyCalls, 2 * values.length + 1);
+        assert.strictEqual(keyCalls, 3 * values.length + 1);
         currentData.rows = [['replacement', '2', '', '', '']];
         assert.strictEqual(names(), 'replacement');
-        assert.strictEqual(keyCalls, 2 * values.length + 2);
+        assert.strictEqual(keyCalls, 3 * values.length + 2);
     """)
 
 
@@ -174,6 +179,27 @@ def test_search_debounces_and_autoplay_flushes_pending_search_immediately():
         assert.strictEqual(timers.size, 0);
         assert.strictEqual(searchRenderTimer, null);
         assert.strictEqual(renders, 3);
+    """)
+
+
+def test_empty_data_refresh_releases_previous_sort_cache():
+    run_browser_test(r"""
+        currentData = data('old dataset');
+        sortCol = 1;
+        getFilteredAndSortedRows(false);
+        assert.strictEqual(sortKeyCache.size, 1);
+        window.pywebview = {api: {
+            async get_config() { return {username: ''}; },
+            async is_fetch_in_progress() { return false; },
+            async get_data() { return {columns: [], rows: [], global_stats: {}}; }
+        }};
+        await fetchData(true);
+        // Empty tables return before sorting, so replacement must still
+        // release the old map and its references to the previous dataset.
+        assert.strictEqual(sortKeyCache.size, 0);
+        assert.strictEqual(sortKeyData, null);
+        assert.strictEqual(sortKeyRows, null);
+        assert.strictEqual(sortKeyColumns, null);
     """)
 
 

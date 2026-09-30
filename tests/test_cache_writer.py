@@ -3,6 +3,7 @@
 from copy import deepcopy
 import threading
 from unittest.mock import Mock
+import weakref
 
 import pytest
 
@@ -212,3 +213,32 @@ def test_thread_start_failure_allows_retry(monkeypatch):
     monkeypatch.setattr(cache.threading, "Thread", original_thread)
     assert writer.request(wait=True)
     assert cache.load_scores_cache() == {"retried": True}
+
+
+def test_previous_snapshot_is_released_before_capturing_pending_changes():
+    """Successive saves must not temporarily retain two full cache copies."""
+    class Snapshot(dict):
+        pass
+
+    references = []
+
+    def snapshot():
+        if references:
+            assert references[-1]() is None, "Previous snapshot is still retained"
+        result = Snapshot(generation=len(references) + 1)
+        references.append(weakref.ref(result))
+        return result
+
+    def save(data):
+        if data["generation"] == 1:
+            # A request during persistence schedules another iteration without
+            # allocating its snapshot until this save has completed.
+            writer.request()
+        return True
+
+    writer = cache.CacheWriter(snapshot, save=save)
+    assert writer.request(wait=True)
+    assert writer.flush()
+
+    assert len(references) == 2
+    assert all(reference() is None for reference in references)

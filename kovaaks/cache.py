@@ -4,6 +4,7 @@ KovaaKs Scenario Tracker — cache utilities.
 Handles loading and saving the gzip-compressed JSON scores cache.
 """
 
+import base64
 import gzip
 import json
 import logging
@@ -11,12 +12,100 @@ import os
 import threading
 import zlib
 
+from .history import CompactHistory
+
 logger = logging.getLogger("kovaaks")
 
 PROJECT_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCORES_CACHE = os.path.join(PROJECT_DIR, "data", "scores_cache.json.gz")
 
 _cache_lock = threading.Lock()
+_HISTORY_FORMAT = "packed-history-v1"
+
+
+class _PackedHistoryRow:
+    """Defer base64 encoding until JSON writes this individual scenario."""
+
+    __slots__ = ("timeline", "counts")
+
+    def __init__(self, timeline, counts):
+        self.timeline = timeline
+        self.counts = counts
+
+
+class _CacheEncoder(json.JSONEncoder):
+    def default(self, value):
+        if isinstance(value, _PackedHistoryRow):
+            return [value.timeline, base64.b64encode(value.counts).decode("ascii")]
+        if isinstance(value, CompactHistory):
+            return dict(value.items())
+        return super().default(value)
+
+
+def _encode_history(cache):
+    """Share timestamps on disk and stream packed counts without a second copy.
+
+    The versioned envelope is local-cache-only; downloaded release datasets keep
+    their existing format. Unusual legacy values remain ordinary JSON mappings.
+    """
+    history = cache.get("entry_history")
+    if not isinstance(history, dict) or not history:
+        return cache
+    timelines, timeline_ids, series = [], {}, {}
+    for lid, points in history.items():
+        points = points if isinstance(points, CompactHistory) else CompactHistory(points)
+        if not points.is_compact:
+            series[lid] = points
+            continue
+        stamps = points.timestamps
+        index = timeline_ids.get(stamps)
+        if index is None:
+            index = len(timelines)
+            timeline_ids[stamps] = index
+            timelines.append(stamps)
+        series[lid] = _PackedHistoryRow(index, points.packed_counts)
+    result = dict(cache)
+    result["entry_history"] = {
+        "_format": _HISTORY_FORMAT, "timelines": timelines, "series": series,
+    }
+    return result
+
+
+def _decode_history(cache):
+    """Accept legacy mappings and reject malformed packed caches without saving."""
+    history = cache.get("entry_history")
+    if history is None:
+        return
+    if not isinstance(history, dict):
+        raise ValueError("entry_history must be an object")
+    if isinstance(history.get("_format"), str):
+        if history["_format"] != _HISTORY_FORMAT:
+            raise ValueError("Unsupported entry history format")
+        timelines, series = history.get("timelines"), history.get("series")
+        if not isinstance(timelines, list) or not isinstance(series, dict):
+            raise ValueError("Invalid packed history envelope")
+        for stamps in timelines:
+            if (not isinstance(stamps, list)
+                    or any(not isinstance(stamp, str) for stamp in stamps)
+                    or len(set(stamps)) != len(stamps)):
+                raise ValueError("Invalid history timeline")
+        for lid, row in series.items():
+            if isinstance(row, dict):
+                series[lid] = CompactHistory(row)
+                continue
+            if (not isinstance(row, list) or len(row) != 2
+                    or type(row[0]) is not int or not 0 <= row[0] < len(timelines)
+                    or not isinstance(row[1], str)):
+                raise ValueError("Invalid packed history row")
+            packed = base64.b64decode(row[1], validate=True)
+            series[lid] = CompactHistory.from_packed(timelines[row[0]], packed)
+        cache["entry_history"] = series
+    else:
+        # Replace one leaf at a time so migration does not keep two histories.
+        for lid, points in history.items():
+            if not isinstance(points, dict):
+                raise ValueError("Invalid legacy history row")
+            history[lid] = CompactHistory(points)
 
 
 def load_scores_cache():
@@ -29,9 +118,10 @@ def load_scores_cache():
         if not isinstance(data, dict):
             logger.warning("Could not load cache: expected a JSON object")
             return {}
+        _decode_history(data)
         logger.info("Loaded cache from %s", SCORES_CACHE)
         return data
-    except (json.JSONDecodeError, OSError, EOFError, UnicodeDecodeError, zlib.error) as e:
+    except (ValueError, OSError, EOFError, UnicodeDecodeError, zlib.error) as e:
         logger.warning("Could not load cache: %s", e)
         return {}
 
@@ -42,7 +132,7 @@ def save_scores_cache(cache_dict):
         tmp_cache = SCORES_CACHE + f".{os.getpid()}.tmp"
         try:
             with gzip.open(tmp_cache, "wt", encoding="utf-8", compresslevel=6) as f:
-                json.dump(cache_dict, f, separators=(",", ":"))
+                json.dump(_encode_history(cache_dict), f, separators=(",", ":"), cls=_CacheEncoder)
             os.replace(tmp_cache, SCORES_CACHE)
             return True
         except (OSError, TypeError, ValueError) as e:
@@ -138,6 +228,9 @@ class CacheWriter:
                 interrupted = True
                 raise
             finally:
+                # Release this potentially large copy before the next snapshot
+                # callback allocates another one, including after failed saves.
+                snapshot = None
                 with self._condition:
                     self._completed_generation = generation
                     if saved:
