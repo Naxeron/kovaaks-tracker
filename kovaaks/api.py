@@ -135,9 +135,10 @@ def kovaaks_get_friends_scores(token, leaderboard_id, session=None,
 
 def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, cancel_check=None):
     """Fetch scenarios from the KovaaKs API (paginated, sorted by popularity).
-    Stops early when all items on a page fall below *min_entries*.
+    Stops early when all original popularity counts on a page fall below
+    *min_entries*. Returned entry counts come from the global leaderboards.
     """
-    from .data_processing import get_estimated_fetch_count
+    from .data_processing import get_estimated_fetch_count, safe_int
 
     url = "https://kovaaks.com/webapp-backend/scenario/popular"
     all_data = []
@@ -168,6 +169,13 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, can
             items = data.get("data", [])
             if not items:
                 break
+
+            # Pagination follows the original inflated popularity counts, not
+            # the accurate player counts fetched below.
+            max_on_page = max(
+                (safe_int(it.get("counts", {}).get("entries", 0)) for it in items),
+                default=0,
+            )
 
             # Fetch accurate entry counts in parallel for the current page
             future_to_item = {
@@ -208,10 +216,6 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, can
 
             # Early stop: API returns by descending popularity
             if min_entries > 0:
-                max_on_page = max(
-                    (int(it.get("counts", {}).get("entries", 0)) for it in items),
-                    default=0,
-                )
                 if max_on_page < min_entries:
                     logger.info("Stopping at page %d — max entries %d < %d",
                                 page, max_on_page, min_entries)

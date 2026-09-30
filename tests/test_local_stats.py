@@ -4,10 +4,14 @@ Tests for _get_local_stats CSV parser.
 import datetime
 import os
 import sys
+from copy import deepcopy
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kovaaks.stats import get_local_stats as _get_local_stats
+import kovaaks.stats as stats_helpers
 
 
 class TestGetLocalStats:
@@ -153,3 +157,90 @@ class TestGetLocalStats:
         _get_local_stats(str(stats_dir), cache)
         assert "newly_played_scenarios" in cache
         assert "1w6ts Reload" in cache["newly_played_scenarios"]
+
+    def test_legacy_cache_rebuilt_once_then_historical_files_are_not_read(self, tmp_path, monkeypatch):
+        """Repair old watcher markers without reparsing history every refresh."""
+        first = tmp_path / "Scenario A - Challenge - 2026.09.29-12.00.00 Stats.csv"
+        second = tmp_path / "Scenario A - Challenge - 2026.09.30-12.00.00 Stats.csv"
+        first.write_text("Score:,100\n", encoding="utf-8")
+        second.write_text("Score:,200\n", encoding="utf-8")
+        cache = {
+            "known_stat_files": [first.name, second.name],
+            "local_stats": {"Scenario A": {
+                "count": 1,
+                "last_played": "2026-09-29T12:00:00",
+                "recent_scores": [["2026-09-29T12:00:00", 100]],
+            }},
+        }
+
+        result = _get_local_stats(str(tmp_path), cache)
+
+        assert result["Scenario A"]["count"] == 2
+        assert cache["local_stats_version"] == stats_helpers.LOCAL_STATS_CACHE_VERSION
+        assert [score for _, score in cache["local_stats"]["Scenario A"]["recent_scores"]] == [100, 200]
+        assert cache.pop("_dirty") is True
+        previous = deepcopy(cache)
+
+        def unexpected_read(*args, **kwargs):
+            raise AssertionError("Historical CSV files must not be reopened")
+
+        monkeypatch.setattr(stats_helpers, "open", unexpected_read, raising=False)
+        assert _get_local_stats(str(tmp_path), cache)["Scenario A"]["count"] == 2
+        assert cache == previous
+
+    @pytest.mark.parametrize("contents", [
+        "", "Scenario:,Scenario A\n", "Score:,invalid\n", "Score:,nan\n", "Score:,inf\n",
+    ])
+    def test_incomplete_file_is_retried_after_valid_score_arrives(self, tmp_path, contents):
+        """Pending files must not commit count/recency/markers or dirty the cache."""
+        path = tmp_path / "Scenario A - Challenge - 2026.09.30-12.00.00 Stats.csv"
+        path.write_text(contents, encoding="utf-8")
+        cache = {
+            "local_stats_version": stats_helpers.LOCAL_STATS_CACHE_VERSION,
+            "known_stat_files": [],
+            "local_stats": {},
+        }
+        previous = deepcopy(cache)
+
+        assert _get_local_stats(str(tmp_path), cache) == {}
+        assert cache == previous
+
+        path.write_text("Score:,120\n", encoding="utf-8")
+        assert _get_local_stats(str(tmp_path), cache)["Scenario A"]["count"] == 1
+        assert cache["local_stats"]["Scenario A"]["recent_scores"] == [["2026-09-30T12:00:00", 120]]
+        assert cache["known_stat_files"] == [path.name]
+        assert cache["newly_played_scenarios"] == ["Scenario A"]
+        assert cache.pop("_dirty") is True
+
+        _get_local_stats(str(tmp_path), cache)
+        assert cache["local_stats"]["Scenario A"]["count"] == 1
+        assert "_dirty" not in cache
+
+    def test_unreadable_file_is_retried_without_committing_statistics(self, tmp_path, monkeypatch):
+        path = tmp_path / "Scenario A - Challenge - 2026.09.30-12.00.00 Stats.csv"
+        path.write_text("Score:,120\n", encoding="utf-8")
+        cache = {
+            "local_stats_version": stats_helpers.LOCAL_STATS_CACHE_VERSION,
+            "known_stat_files": [],
+            "local_stats": {},
+        }
+        previous = deepcopy(cache)
+
+        def unreadable(*args, **kwargs):
+            raise PermissionError("CSV temporarily locked")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(stats_helpers, "open", unreadable, raising=False)
+            assert _get_local_stats(str(tmp_path), cache) == {}
+            assert cache == previous
+
+        assert _get_local_stats(str(tmp_path), cache)["Scenario A"]["count"] == 1
+        assert cache["known_stat_files"] == [path.name]
+
+    def test_zero_score_is_valid(self, tmp_path):
+        path = tmp_path / "Scenario A - Challenge - 2026.09.30-12.00.00 Stats.csv"
+        path.write_text("Score:,0\n", encoding="utf-8")
+        cache = {}
+
+        assert _get_local_stats(str(tmp_path), cache)["Scenario A"]["count"] == 1
+        assert cache["local_stats"]["Scenario A"]["recent_scores"] == [["2026-09-30T12:00:00", 0]]

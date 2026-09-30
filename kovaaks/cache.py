@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import threading
+import zlib
 
 logger = logging.getLogger("kovaaks")
 
@@ -25,9 +26,12 @@ def load_scores_cache():
     try:
         with gzip.open(SCORES_CACHE, "rt", encoding="utf-8") as f:
             data = json.load(f)
+        if not isinstance(data, dict):
+            logger.warning("Could not load cache: expected a JSON object")
+            return {}
         logger.info("Loaded cache from %s", SCORES_CACHE)
         return data
-    except (json.JSONDecodeError, OSError, EOFError) as e:
+    except (json.JSONDecodeError, OSError, EOFError, UnicodeDecodeError, zlib.error) as e:
         logger.warning("Could not load cache: %s", e)
         return {}
 

@@ -30,17 +30,31 @@ A vibe-coded tracker for KovaaKs. Built for rank farming, sniping friends, and o
    ```
 
 2. **Run**:
-   - **Desktop GUI**: `python kovaaks_gui.py`
-   - **Web UI**: `python kovaaks_web.py`
+   ```bash
+   python kovaaks_web.py
+   ```
+   This opens the desktop app, which uses a web-based interface.
 3. **Login**: Enter your KovaaKs credentials.
 
 ## Controls
 
-- **▶ Play**: Click the play icon or press **Enter** to launch in KovaaKs.
+- **▶ Play**: Click the play icon or double-click a row to launch in KovaaKs.
 - **🔁 Autoplay**: Enable to auto-advance through your list.
 - **⟳ Refresh**: Sync latest scores and scenarios.
-- **Right-click**: Hide/show columns.
-- **Double-click**: Copy scenario name.
+- **Right-click a column header**: Hide/show columns.
+- **Right-click a row**: Play, copy the scenario name, or hide/unhide the scenario.
+
+## Tests
+
+```bash
+python -m pip install -r requirements.txt pytest
+python -m pytest -q
+```
+
+Tests use temporary caches, settings, logs, and stats directories. Install Node.js
+to include the JavaScript rendering tests; those tests are skipped when Node.js
+is unavailable. GitHub Actions runs the suite on Python 3.10 and 3.14 for pushes
+and pull requests.
 
 ## Credits
 

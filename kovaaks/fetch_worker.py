@@ -43,8 +43,17 @@ def fetch_gzip_json_from_github(filename, app):
 def run_fetch_all(app, username, password, silent=False):
     """Background worker that fetches all scenarios and updates the GUI state."""
     app._fetch_in_progress = True
-    try:
+    cancelled = threading.Event()
+    lock = threading.Lock()
+
+    def _is_cancelled():
+        """Keep cancellation sticky for this run after the shared flag resets."""
         if getattr(app, "_fetch_cancelled", False) is True:
+            cancelled.set()
+        return cancelled.is_set()
+
+    try:
+        if _is_cancelled():
             app._rebuild_data_and_cancelled(silent=silent)
             return
 
@@ -55,7 +64,7 @@ def run_fetch_all(app, username, password, silent=False):
         
         app._update_progress(0.01, 1.0)
         all_scenarios = fetch_gzip_json_from_github("scenarios.json.gz", app)
-        if getattr(app, "_fetch_cancelled", False) is True:
+        if _is_cancelled():
             app._rebuild_data_and_cancelled(silent=silent)
             return
 
@@ -83,13 +92,13 @@ def run_fetch_all(app, username, password, silent=False):
         app._update_progress(0.10, 1.0)
 
         if not all_scenarios:
-            if getattr(app, "_fetch_cancelled", False) is True:
+            if _is_cancelled():
                 app._rebuild_data_and_cancelled(silent=silent)
                 return
             app._update_status("Fetching scenarios (API fallback)…")
             total_est = get_estimated_fetch_count(min_entries_threshold) + get_estimated_matching_count(min_entries_threshold)
             def check_cancel():
-                if getattr(app, "_fetch_cancelled", False) is True:
+                if _is_cancelled():
                     raise RuntimeError("Fetch cancelled")
 
             def cb(done, tot, msg):
@@ -111,7 +120,7 @@ def run_fetch_all(app, username, password, silent=False):
             logger.info("API returned %d total scenarios", len(all_scenarios))
             app._update_progress(0.10, 1.0)
 
-        if getattr(app, "_fetch_cancelled", False) is True:
+        if _is_cancelled():
             app._rebuild_data_and_cancelled(silent=silent)
             return
         scores_cache["scenarios"] = all_scenarios
@@ -130,7 +139,7 @@ def run_fetch_all(app, username, password, silent=False):
         } for s in master}
         app._scenario_info = scenario_info
         
-        if getattr(app, "_fetch_cancelled", False) is True:
+        if _is_cancelled():
             app._rebuild_data_and_cancelled(silent=silent)
             return
 
@@ -140,12 +149,12 @@ def run_fetch_all(app, username, password, silent=False):
             app._update_status("Logging in to KovaaKs…")
             try:
                 app._jwt_token = kovaaks_login(username, password)
-                if getattr(app, "_fetch_cancelled", False) is True:
+                if _is_cancelled():
                     app._rebuild_data_and_cancelled(silent=silent)
                     return
                 app._update_progress(0.25, 1.0)
             except Exception as e:
-                if getattr(app, "_fetch_cancelled", False) is True:
+                if _is_cancelled():
                     app._rebuild_data_and_cancelled(silent=silent)
                     return
                 logger.warning("Login failed, skipping score fetch: %s", e)
@@ -179,14 +188,13 @@ def run_fetch_all(app, username, password, silent=False):
             app._rebuild_data_and_finish(silent=silent)
             return
 
-        if getattr(app, "_fetch_cancelled", False) is True:
+        if _is_cancelled():
             app._rebuild_data_and_cancelled(silent=silent)
             return
 
         app._update_status(f"Fetching scores for {total_to_fetch} scenarios ({cached_count} cached)…")
         app._rebuild_data()
 
-        lock = threading.Lock()
         errors = completed = 0
         session_expired = False
         start_time = time.time()
@@ -200,13 +208,13 @@ def run_fetch_all(app, username, password, silent=False):
 
         def _fetch_one(lid, session):
             nonlocal errors, completed, session_expired
-            if session_expired or getattr(app, "_fetch_cancelled", False) is True:
+            if session_expired or _is_cancelled():
                 return
 
             try:
                 data = kovaaks_get_friends_scores(app._jwt_token, lid, session=session)
             except requests.exceptions.HTTPError as e:
-                if getattr(app, "_fetch_cancelled", False) is True:
+                if _is_cancelled():
                     return
                 if e.response is not None and e.response.status_code == 401:
                     session_expired = True
@@ -214,21 +222,27 @@ def run_fetch_all(app, username, password, silent=False):
                 with lock: errors += 1
                 return
             except Exception:
-                if getattr(app, "_fetch_cancelled", False) is True:
+                if _is_cancelled():
                     return
                 with lock: errors += 1
                 return
 
-            if data is None:
+            if data is None or _is_cancelled():
                 return
 
             user_entry, friend_entries = parse_leaderboard_entries(data, username)
             with lock:
+                if _is_cancelled():
+                    return
                 cache_entry = {}
                 if user_entry:
                     user_by_lid[lid] = cache_entry["user"] = user_entry
+                else:
+                    user_by_lid.pop(lid, None)
                 if friend_entries:
                     friends_by_lid[lid] = cache_entry["friends"] = friend_entries
+                else:
+                    friends_by_lid.pop(lid, None)
                 scores_data[lid] = cache_entry
                 completed += 1
                 done = completed
@@ -237,31 +251,35 @@ def run_fetch_all(app, username, password, silent=False):
                     last_save[0] = done
                     _save_cache()
 
-            if done % 20 == 0 or done == total_to_fetch:
-                now = time.time()
-                eta_window.append((done, now))
-                if len(eta_window) > 10: eta_window.pop(0)
-                rate = (done - eta_window[0][0]) / (now - eta_window[0][1]) if len(eta_window) >= 2 and now > eta_window[0][1] else (done / (now - start_time) if now > start_time else 0)
-                rem = (total_to_fetch - done) / rate if rate > 0 else 0
-                m, s = divmod(int(rem), 60)
-                app._update_status(f"Fetching scores… {done}/{total_to_fetch} ({cached_count} cached, {errors} errors) — ETA {f'{m}m{s:02d}s' if m else f'{s}s'}")
-                app._update_progress(min(1.0, 0.25 + 0.75 * (done / total_to_fetch)), 1.0)
-                
-            if done - last_refresh[0] >= 100:
-                last_refresh[0] = done
-                app._rebuild_data()
+            # Serialize callbacks with finalization so a checked callback cannot
+            # resume after this run releases the app for the next fetch.
+            with lock:
+                if (done % 20 == 0 or done == total_to_fetch) and not _is_cancelled():
+                    now = time.time()
+                    eta_window.append((done, now))
+                    if len(eta_window) > 10: eta_window.pop(0)
+                    rate = (done - eta_window[0][0]) / (now - eta_window[0][1]) if len(eta_window) >= 2 and now > eta_window[0][1] else (done / (now - start_time) if now > start_time else 0)
+                    rem = (total_to_fetch - done) / rate if rate > 0 else 0
+                    m, s = divmod(int(rem), 60)
+                    app._update_status(f"Fetching scores… {done}/{total_to_fetch} ({cached_count} cached, {errors} errors) — ETA {f'{m}m{s:02d}s' if m else f'{s}s'}")
+                    if not _is_cancelled():
+                        app._update_progress(min(1.0, 0.25 + 0.75 * (done / total_to_fetch)), 1.0)
+
+                if done - last_refresh[0] >= 100 and not _is_cancelled():
+                    last_refresh[0] = done
+                    app._rebuild_data()
 
         session = requests.Session()
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=25)
         try:
             futures = [executor.submit(_fetch_one, lid, session) for lid in work_items]
             for future in concurrent.futures.as_completed(futures):
-                if getattr(app, "_fetch_cancelled", False) is True:
+                if _is_cancelled():
                     break
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
-        if getattr(app, "_fetch_cancelled", False) is True:
+        if _is_cancelled():
             with lock: _save_cache()
             app._rebuild_data_and_cancelled(silent=silent)
             return
@@ -279,6 +297,9 @@ def run_fetch_all(app, username, password, silent=False):
         logger.exception("Error in fetch thread")
         app._update_status(f"Error: {e}")
     finally:
-        app._fetch_in_progress = False
+        # In-flight requests may outlive this run because shutdown is nonblocking.
+        with lock:
+            cancelled.set()
         app._fetch_cancelled = False
+        app._fetch_in_progress = False
 

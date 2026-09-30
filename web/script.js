@@ -1125,8 +1125,16 @@ function renderNextBatch() {
             const cell = row[originalIndex];
             const td = document.createElement('td');
             if (originalIndex === 0) {
-                const escapedCell = String(cell).replace(/"/g, '&quot;');
-                td.innerHTML = `<span class="play-btn-cell" data-scenario="${escapedCell}" style="color:#aaaaaa; margin-right:5px; cursor:pointer;">▶</span> ${cell}`;
+                // Scenario names come from the API; keep them as literal text.
+                const playButton = document.createElement('span');
+                playButton.className = 'play-btn-cell';
+                playButton.setAttribute('data-scenario', String(cell));
+                playButton.style.color = '#aaaaaa';
+                playButton.style.marginRight = '5px';
+                playButton.style.cursor = 'pointer';
+                playButton.textContent = '▶';
+                td.appendChild(playButton);
+                td.appendChild(document.createTextNode(` ${cell}`));
             } else {
                 td.textContent = cell;
             }

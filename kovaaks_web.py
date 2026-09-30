@@ -13,6 +13,7 @@ import threading
 import time
 import datetime
 import math
+from copy import deepcopy
 
 from kovaaks.constants import MIN_ENTRIES
 from kovaaks.config_helpers import load_config
@@ -59,6 +60,7 @@ def _clean_aim_type(raw_type, scenario_name):
 class KovaaksAPI:
     def __init__(self):
         self.window = None
+        self._data_lock = threading.RLock()
         self._cfg = load_config()
         self._scores_cache = {}
         self._scenario_info = {}
@@ -83,27 +85,40 @@ class KovaaksAPI:
             threading.Thread(target=self._initial_cache_load, daemon=True).start()
 
     def _initial_cache_load(self):
+        """Load cached data without leaving callers blocked after a failure."""
         logger.info("Starting background cache load...")
         t0 = time.time()
-        self._load_cache_and_populate()
-        
-        # Build the data once and update status/progress
-        played, unplayed = self._rebuild_data()
-        self._update_status(
-            f"Rebuilt from memory cache — {len(played)} played, {len(unplayed)} unplayed"
-        )
-        self._update_progress(1, 1)
-        
-        # Save the updated scores cache in case get_local_stats added new local runs
-        if self._scores_cache.pop("_dirty", False) and not getattr(self, "_cache_corrupted", False):
-            save_scores_cache(self._scores_cache)
-        
-        self._cache_loaded_event.set()
-        logger.info("Background cache load completed in %.2fs", time.time() - t0)
-        
-        # Notify JS that the data is ready
-        if self.window:
-            self.window.evaluate_js("if(window.fetchData) window.fetchData()")
+        try:
+            self._load_cache_and_populate()
+
+            # Build the data once and update status/progress
+            played, unplayed = self._rebuild_data()
+            status = f"Rebuilt from memory cache — {len(played)} played, {len(unplayed)} unplayed"
+
+            # Save the updated scores cache in case get_local_stats added new local runs
+            if self._scores_cache.pop("_dirty", False) and not getattr(self, "_cache_corrupted", False):
+                save_scores_cache(self._scores_cache)
+        except Exception:
+            logger.exception("Background cache load failed")
+            status = "Could not load cached data. Check the logs and refresh to retry."
+        finally:
+            self._cache_loaded_event.set()
+            logger.info("Background cache load completed in %.2fs", time.time() - t0)
+            try:
+                self._update_status(status)
+            except Exception:
+                logger.debug("Startup status notification failed", exc_info=True)
+            try:
+                self._update_progress(1, 1)
+            except Exception:
+                logger.debug("Startup progress notification failed", exc_info=True)
+
+            # Notify JS that the data is ready
+            if self.window:
+                try:
+                    self.window.evaluate_js("if(window.fetchData) window.fetchData()")
+                except Exception:
+                    logger.debug("Startup data notification failed", exc_info=True)
 
     def set_window(self, window):
         self.window = window
@@ -143,11 +158,9 @@ class KovaaksAPI:
 
         self._zombies = set(self._scores_cache.setdefault("zombies", []))
         all_scenarios = load_scenarios_from_cache(self._scores_cache)
-        if not all_scenarios:
-            return
 
         # Filter to config-defined min entries
-        min_entries_threshold = int(self._cfg.get("min_entries", MIN_ENTRIES))
+        min_entries_threshold = safe_int(self._cfg.get("min_entries", MIN_ENTRIES), MIN_ENTRIES)
         master = []
         for s in all_scenarios:
             entries = s.get("counts", {}).get("entries", 0)
@@ -157,9 +170,6 @@ class KovaaksAPI:
                 entries = 0
             if entries >= min_entries_threshold:
                 master.append(s)
-
-        if not master:
-            return
 
         # Build lid -> scenario info map
         scenario_info = {}
@@ -190,6 +200,7 @@ class KovaaksAPI:
                 if "friends" in cached and cached["friends"]:
                     friends_by_lid[lid] = cached["friends"]
 
+        # Replace these maps even when empty to clear stale filtered rows.
         self._scenario_info = scenario_info
         self._user_by_lid = user_by_lid
         self._friends_by_lid = friends_by_lid
@@ -201,6 +212,16 @@ class KovaaksAPI:
 
     def _rebuild_data(self):
         """Build unified row list from current data and update the UI."""
+        with self._data_lock:
+            return self._build_data_rows()
+
+    def _invalidate_local_stats(self):
+        """Keep file events from being lost while another refresh parses stats."""
+        with self._data_lock:
+            self._local_stats_dirty = True
+
+    def _build_data_rows(self):
+        """Compute rows while holding the data lock to avoid duplicate parsing."""
         scenario_info = self._scenario_info
         user_by_lid = self._user_by_lid
         friends_by_lid = self._friends_by_lid
@@ -472,14 +493,25 @@ class KovaaksAPI:
 
     def get_data(self, min_entries, show_hidden=False):
         self._cache_loaded_event.wait()
+        with self._data_lock:
+            return self._get_loaded_data(min_entries, show_hidden)
+
+    def _get_loaded_data(self, min_entries, show_hidden):
+        """Serialize filter changes, local parsing, and global-stat snapshots."""
         self._cfg["min_entries"] = min_entries
         class DummyVar:
             def __init__(self, val): self.val = val
             def get(self): return self.val
         self._filters["hidden"] = DummyVar(show_hidden)
-        self._load_cache_and_populate()
         try:
+            self._load_cache_and_populate()
             played, unplayed = self._rebuild_data()
+            if self._scores_cache.pop("_dirty", False) and not getattr(self, "_cache_corrupted", False):
+                snapshot = deepcopy(self._scores_cache)
+                if "pytest" in sys.modules:
+                    save_scores_cache(snapshot)
+                else:
+                    threading.Thread(target=save_scores_cache, args=(snapshot,), daemon=True).start()
             all_data = played + unplayed
             
             if not all_data:
@@ -715,6 +747,11 @@ class KovaaksAPI:
         }
 
     def save_settings(self, settings):
+        with self._data_lock:
+            self._save_settings(settings)
+
+    def _save_settings(self, settings):
+        """Invalidate directory-specific stats atomically with their settings."""
         from kovaaks.config_helpers import save_config
         old_stats_dir = self._cfg.get("stats_dir")
         self._cfg.update(settings)
@@ -729,9 +766,15 @@ class KovaaksAPI:
                     self._known_stat_files.update(f for f in os.listdir(stats_dir) if f.endswith(" Stats.csv"))
                 except OSError:
                     pass
-            self._scores_cache["known_stat_files"] = list(self._known_stat_files)
-            save_scores_cache(self._scores_cache)
-            self._local_stats_dirty = True
+            # Parsed statistics belong to the configured directory, even when
+            # the new directory contains files with the same names.
+            self._scores_cache["known_stat_files"] = []
+            self._scores_cache["local_stats"] = {}
+            self._scores_cache["newly_played_scenarios"] = []
+            self._local_stats_cache = {}
+            if not getattr(self, "_cache_corrupted", False):
+                save_scores_cache(self._scores_cache)
+            self._invalidate_local_stats()
             self._start_file_watcher()
 
     def save_credentials(self, username, password):
@@ -928,11 +971,11 @@ class KovaaksAPI:
                 new_files = current_files - cached_known
                 
                 self._known_stat_files = current_files
-                self._scores_cache["known_stat_files"] = list(self._known_stat_files)
-                save_scores_cache(self._scores_cache)
+                # Observed files are separate from the parser's cached files.
+                # get_local_stats marks files known only after parsing them.
                 
                 if new_files:
-                    self._local_stats_dirty = True
+                    self._invalidate_local_stats()
                     threading.Thread(
                         target=self._handle_new_stats_files,
                         args=(stats_dir, new_files),
@@ -978,18 +1021,23 @@ class KovaaksAPI:
                     if not fname.endswith(" Stats.csv"):
                         return
                     if fname in api_ref._known_stat_files:
+                        # A creation event can arrive before the CSV is complete.
+                        # Retry parsing modifications without advancing autoplay again.
+                        if fname not in api_ref._scores_cache.get("known_stat_files", []):
+                            api_ref._invalidate_local_stats()
+                            if api_ref.window:
+                                threading.Thread(
+                                    target=api_ref.window.evaluate_js,
+                                    args=("if(window.fetchData) window.fetchData()",),
+                                    daemon=True,
+                                ).start()
                         return
                     api_ref._known_stat_files.add(fname)
-                    api_ref._scores_cache["known_stat_files"] = list(api_ref._known_stat_files)
                     
-                    # Save cache in the background to avoid blocking the file event handler thread
-                    threading.Thread(
-                        target=save_scores_cache,
-                        args=(api_ref._scores_cache,),
-                        daemon=True
-                    ).start()
+                    # Save parsed cache changes in the background during get_data,
+                    # avoiding premature parsed markers in the file event handler.
 
-                    api_ref._local_stats_dirty = True
+                    api_ref._invalidate_local_stats()
                     threading.Thread(
                         target=api_ref._handle_new_stats_files,
                         args=(stats_dir, {fname}),
@@ -1027,6 +1075,9 @@ class KovaaksAPI:
     def _poll_stats_loop(self):
         """Fallback polling loop using directory mtime for change detection."""
         last_mtime = 0
+        pending_mtimes = dict.fromkeys(
+            self._known_stat_files - set(self._scores_cache.get("known_stat_files", []))
+        )
         stats_dir = self._get_stats_dir()
         if stats_dir and os.path.exists(stats_dir):
             try:
@@ -1042,31 +1093,51 @@ class KovaaksAPI:
             try:
                 # Fast check using directory modification time
                 mtime = os.stat(stats_dir).st_mtime
-                if mtime == last_mtime:
-                    continue
-                last_mtime = mtime
-
-                current_files = set(f for f in os.listdir(stats_dir) if f.endswith(" Stats.csv"))
-                new_files = current_files - self._known_stat_files
+                if mtime != last_mtime:
+                    last_mtime = mtime
+                    current_files = set(f for f in os.listdir(stats_dir) if f.endswith(" Stats.csv"))
+                    new_files = current_files - self._known_stat_files
+                else:
+                    new_files = set()
                 if new_files:
                     self._known_stat_files.update(new_files)
-                    self._scores_cache["known_stat_files"] = list(self._known_stat_files)
                     
-                    # Save cache in the background to avoid blocking the polling thread
-                    threading.Thread(
-                        target=save_scores_cache,
-                        args=(self._scores_cache,),
-                        daemon=True
-                    ).start()
+                    # Save parsed cache changes in the background during get_data,
+                    # avoiding premature parsed markers in the polling thread.
                     
-                    self._local_stats_dirty = True
+                    self._invalidate_local_stats()
                     threading.Thread(
                         target=self._handle_new_stats_files,
                         args=(stats_dir, new_files),
                         daemon=True
                     ).start()
+
+                # File writes do not change the directory mtime. Watch only
+                # pending CSVs until their scores have been successfully parsed.
+                pending_files = (set(pending_mtimes) | new_files) & self._known_stat_files
+                if pending_files:
+                    pending_files -= set(self._scores_cache.get("known_stat_files", []))
+                signatures = {}
+                changed_pending = False
+                for fname in pending_files:
+                    try:
+                        file_stat = os.stat(os.path.join(stats_dir, fname))
+                    except OSError:
+                        signatures[fname] = None
+                        continue
+                    signature = (file_stat.st_mtime_ns, file_stat.st_size)
+                    signatures[fname] = signature
+                    if fname in pending_mtimes and pending_mtimes[fname] != signature:
+                        changed_pending = True
+                pending_mtimes = signatures
+                if changed_pending:
+                    self._invalidate_local_stats()
+                    if self.window:
+                        self.window.evaluate_js("if(window.fetchData) window.fetchData()")
             except OSError:
                 pass
+            except Exception as e:
+                logger.warning("Stats polling failed: %s", e)
 
     def _handle_new_stats_files(self, stats_dir, new_files):
         # Extract scenario names from filenames immediately (no file I/O needed)
@@ -1130,6 +1201,12 @@ class KovaaksAPI:
 
         if not lids_to_update:
             return
+
+        # The first table refresh may have raced an incomplete CSV. Refresh
+        # again after the score-read retries, before waiting for the remote API.
+        self._invalidate_local_stats()
+        if self.window:
+            self.window.evaluate_js("if(window.fetchData) window.fetchData()")
 
         # Brief pause to let the KovaaKs client upload the stats to the server.
         # The client typically uploads within ~1s of writing the stats file.

@@ -7,9 +7,14 @@ play counts, recency, trends, and score history.
 
 import datetime
 import logging
+import math
 import os
 
+from .data_processing import safe_float
+
 logger = logging.getLogger("kovaaks")
+
+LOCAL_STATS_CACHE_VERSION = 2
 
 
 def _compute_trend_and_pb(scores):
@@ -45,10 +50,21 @@ def get_local_stats(stats_dir, cache_dict=None):
     # Determine if we can do incremental loading
     use_incremental = False
     if cache_dict is not None:
+        if cache_dict.get("local_stats_version") != LOCAL_STATS_CACHE_VERSION:
+            # Legacy watchers marked files parsed before their stats were read.
+            # Rebuild once, then retain the incremental cache on future calls.
+            cache_dict.update({
+                "local_stats": {},
+                "known_stat_files": [],
+                "local_stats_version": LOCAL_STATS_CACHE_VERSION,
+                "_dirty": True,
+            })
         if "local_stats" not in cache_dict:
             cache_dict["local_stats"] = {}
+            cache_dict["_dirty"] = True
         if "known_stat_files" not in cache_dict:
             cache_dict["known_stat_files"] = []
+            cache_dict["_dirty"] = True
         use_incremental = True
 
     if use_incremental:
@@ -58,8 +74,6 @@ def get_local_stats(stats_dir, cache_dict=None):
 
         # Parse new files and update cached stats
         if new_files:
-            cache_dict["_dirty"] = True
-            newly_played = cache_dict.setdefault("newly_played_scenarios", [])
             # Sort chronologically (oldest to newest) to process runs in order
             sorted_new_files = []
             for fname in new_files:
@@ -70,14 +84,29 @@ def get_local_stats(stats_dir, cache_dict=None):
                 try:
                     dt = datetime.datetime.strptime(date_str, "%Y.%m.%d-%H.%M.%S")
                     sorted_new_files.append((dt, fname, sname))
-                    if sname not in newly_played:
-                        newly_played.append(sname)
                 except ValueError:
                     continue
 
             sorted_new_files.sort(key=lambda x: x[0])
+            parsed_files = set()
 
             for dt, fname, sname in sorted_new_files:
+                # Read score from file
+                score_val = None
+                try:
+                    with open(os.path.join(stats_dir, fname), "r", encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            if line.startswith("Score:,"):
+                                score_val = safe_float(line.split(",")[1], None)
+                                break
+                except OSError:
+                    pass
+
+                # Creation events can arrive before the CSV is complete. Leave
+                # unreadable or incomplete files pending so a later call retries.
+                if score_val is None or not math.isfinite(score_val):
+                    continue
+
                 # Initialize scenario in cache if not exists
                 if sname not in local_stats_cache:
                     local_stats_cache[sname] = {
@@ -94,35 +123,31 @@ def get_local_stats(stats_dir, cache_dict=None):
                 if dt > last_played_dt:
                     entry["last_played"] = dt.isoformat()
 
-                # Read score from file
-                score_val = None
-                try:
-                    with open(os.path.join(stats_dir, fname), "r", encoding="utf-8", errors="ignore") as f:
-                        for line in f:
-                            if line.startswith("Score:,"):
-                                score_val = float(line.split(",")[1])
-                                break
-                except Exception:
-                    pass
+                # Load existing recent scores, parse their dates to datetime
+                scores = []
+                for d_str, val in entry.get("recent_scores", []):
+                    try:
+                        scores.append((datetime.datetime.fromisoformat(d_str), val))
+                    except ValueError:
+                        pass
+                scores.append((dt, score_val))
+                # Sort and keep 10 most recent
+                scores = sorted(scores, key=lambda x: x[0])[-10:]
+                trend, runs_since_pb = _compute_trend_and_pb(scores)
+                entry["trend"] = trend
+                entry["runs_since_recent_pb"] = runs_since_pb
+                entry["recent_scores"] = [[s[0].isoformat(), s[1]] for s in scores]
 
-                if score_val is not None:
-                    # Load existing recent scores, parse their dates to datetime
-                    scores = []
-                    for d_str, val in entry.get("recent_scores", []):
-                        try:
-                            scores.append((datetime.datetime.fromisoformat(d_str), val))
-                        except ValueError:
-                            pass
-                    scores.append((dt, score_val))
-                    # Sort and keep 10 most recent
-                    scores = sorted(scores, key=lambda x: x[0])[-10:]
-                    trend, runs_since_pb = _compute_trend_and_pb(scores)
-                    entry["trend"] = trend
-                    entry["runs_since_recent_pb"] = runs_since_pb
-                    entry["recent_scores"] = [[s[0].isoformat(), s[1]] for s in scores]
+                parsed_files.add(fname)
+                newly_played = cache_dict.setdefault("newly_played_scenarios", [])
+                if sname not in newly_played:
+                    newly_played.append(sname)
 
             # Update cache dict known files list
-            cache_dict["known_stat_files"] = list(current_files)
+            if parsed_files:
+                known_files.update(parsed_files)
+                cache_dict["known_stat_files"] = sorted(known_files)
+                cache_dict["_dirty"] = True
 
         # Prepare the stats output from the cache
         stats = {}
@@ -179,7 +204,8 @@ def get_local_stats(stats_dir, cache_dict=None):
     today_str = now_dt.strftime("%Y.%m.%d")
     yesterday_str = yesterday.strftime("%Y.%m.%d")
 
-    for fname in current_files:
+    counted_files = current_files & known_files if use_incremental else current_files
+    for fname in counted_files:
         if (today_str in fname or yesterday_str in fname) and len(parts := fname[:-10].rsplit(" - ", 2)) >= 3:
             sname, _, date_str = parts
             try:

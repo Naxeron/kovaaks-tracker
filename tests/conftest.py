@@ -9,6 +9,33 @@ import tempfile
 import pytest
 
 
+def pytest_configure(config):
+    """Redirect import-time logging before test modules import the web API."""
+    import kovaaks.logging_helpers as logging_helpers
+
+    directory = tempfile.TemporaryDirectory(prefix="kovaaks-tests-")
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr(logging_helpers, "LOG_FILE", os.path.join(directory.name, "kovaaks.log"))
+    config._kovaaks_test_logging = (directory, patcher)
+
+
+def pytest_unconfigure(config):
+    """Close isolated log handlers before removing their temporary directory."""
+    import logging
+
+    state = getattr(config, "_kovaaks_test_logging", None)
+    if state is None:
+        return
+    directory, patcher = state
+    logger = logging.getLogger("kovaaks")
+    for handler in list(logger.handlers):
+        if isinstance(handler, logging.FileHandler) and handler.baseFilename.startswith(directory.name + os.sep):
+            logger.removeHandler(handler)
+            handler.close()
+    patcher.undo()
+    directory.cleanup()
+
+
 # ---------------------------------------------------------------------------
 # Sample scenario data
 # ---------------------------------------------------------------------------
@@ -210,3 +237,4 @@ def patch_production_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "SCORES_CACHE", fake_cache_path)
     monkeypatch.setattr(kovaaks_web, "SCORES_CACHE", fake_cache_path)
     monkeypatch.setattr(config_helpers, "CONFIG_PATH", fake_config_path)
+    monkeypatch.setattr(config_helpers, "get_default_stats_dir", lambda: str(tmp_path / "stats"))

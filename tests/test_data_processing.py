@@ -9,6 +9,7 @@ import datetime
 import math
 import os
 import sys
+import threading
 from unittest.mock import patch, MagicMock, PropertyMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -44,6 +45,8 @@ def _make_app_stub(scenario_info, user_by_lid, friends_by_lid,
     app.after = MagicMock()
 
     # Bind the real _rebuild_data to our stub
+    app._data_lock = threading.RLock()
+    app._build_data_rows = kovaaks_web.KovaaksAPI._build_data_rows.__get__(app)
     orig_rebuild = kovaaks_web.KovaaksAPI._rebuild_data.__get__(app)
     def rebuild_data_wrapper(*args, **kwargs):
         played, unplayed = orig_rebuild(*args, **kwargs)
@@ -309,4 +312,3 @@ class TestRebuildDataRows:
         # 8. Exact match at 0 diff
         app._scores_cache["next_rank"]["points"] = 1000  # diff = 0
         assert app.get_scenarios_left_to_next_rank() == {"count": "0", "live_gap": "+0", "global_avg_pct": "75.00%", "required_avg_pct": "0.00%"}
-

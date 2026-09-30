@@ -86,11 +86,14 @@ def test_start_stats_polling(mock_thread, mock_listdir, mock_exists, mock_load_c
 
     api = KovaaksAPI()
     mock_thread.reset_mock()
-    api._start_stats_polling()
+    with patch.object(api, "_start_file_watcher") as mock_watcher:
+        api._start_stats_polling()
+        mock_watcher.assert_called_once()
 
     assert "1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv" in api._known_stat_files
     mock_thread.assert_called_once()
-    mock_save.assert_called()
+    assert mock_thread.call_args.kwargs["target"] == api._handle_new_stats_files
+    mock_save.assert_not_called()
 
 
 @patch("kovaaks_web.save_scores_cache")
@@ -107,6 +110,7 @@ def test_start_stats_polling_with_new_files(
         "scenarios": [],
         "scores": {},
         "entry_history": {},
+        "local_stats_version": 2,
         "known_stat_files": ["1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv"]
     }
     mock_exists.return_value = True
@@ -128,14 +132,16 @@ def test_start_stats_polling_with_new_files(
     mock_thread.reset_mock()
     mock_save.reset_mock()
     
-    api._start_stats_polling()
+    with patch.object(api, "_start_file_watcher") as mock_watcher:
+        api._start_stats_polling()
+        mock_watcher.assert_called_once()
 
     assert "1w6ts Reload - Challenge - 2026.05.10-13.00.00 Stats.csv" in api._known_stat_files
     assert "1w6ts Reload - Challenge - 2026.05.10-12.00.00 Stats.csv" in api._known_stat_files
     
-    # 1 for poll loop, 1 for _handle_new_stats_files
-    assert mock_thread.call_count == 2
-    mock_save.assert_called()
+    # Only the new-run handler; watcher startup is verified independently.
+    assert mock_thread.call_count == 1
+    mock_save.assert_not_called()
 
 
 
@@ -760,8 +766,5 @@ def test_save_settings_restarts_watcher(
 
     api.save_settings({"stats_dir": "/new/dir"})
     mock_start_watcher.assert_called_once()
-
-
-
 
 
