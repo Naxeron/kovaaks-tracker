@@ -19,6 +19,34 @@ def parse_iso_dt(s):
     return datetime.datetime.fromisoformat(ds).replace(tzinfo=None)
 
 
+def prune_entry_history(history, now_datetime=None, limit=168):
+    """Bound every scenario's history, including scenarios outside UI filters.
+
+    Shared hourly timestamps are parsed once per pass. Discard malformed and
+    implausibly future samples before retaining the newest valid samples.
+    """
+    now = now_datetime or datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    cutoff = now + datetime.timedelta(hours=1)
+    parsed = {}
+    changed = False
+    for points in history.values():
+        for stamp in list(points):
+            if stamp not in parsed:
+                try:
+                    parsed[stamp] = parse_iso_dt(stamp)
+                except (ValueError, TypeError, AttributeError):
+                    parsed[stamp] = None
+            if parsed[stamp] is None or parsed[stamp] > cutoff:
+                del points[stamp]
+                changed = True
+        if len(points) > limit:
+            oldest = sorted(points, key=parsed.__getitem__)[:-limit]
+            for stamp in oldest:
+                del points[stamp]
+            changed = True
+    return changed
+
+
 def parse_popularity_metrics(hist, now_datetime=None):
     """Calculate popularity trend and actual new entries in the last 24 hours.
 

@@ -65,3 +65,40 @@ class TestLoadScenariosFromCache:
         assert "scenarioName" in first
         assert "counts" in first
         assert "entries" in first["counts"]
+
+
+class TestSaveScoresCache:
+    def test_atomic_save_round_trips_at_compression_level_six(self, monkeypatch, tmp_path):
+        opened = []
+        gzip_open = gzip.open
+
+        def record_open(path, *args, **kwargs):
+            opened.append((path, kwargs))
+            return gzip_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(cache_helpers.gzip, "open", record_open)
+        data = {"scores": {"one": {"score": 123.5}}, "scenarios": []}
+
+        assert cache_helpers.save_scores_cache(data) is True
+        assert opened[0][0] == cache_helpers.SCORES_CACHE + f".{os.getpid()}.tmp"
+        assert opened[0][1]["compresslevel"] == 6
+        assert cache_helpers.load_scores_cache() == data
+        assert not list(tmp_path.glob("*.tmp"))
+
+    @pytest.mark.parametrize("failure", ["replace", "serialize"])
+    def test_failed_save_preserves_previous_cache_and_removes_temp(self, monkeypatch, tmp_path, failure):
+        original = {"scores": {"one": 100}}
+        assert cache_helpers.save_scores_cache(original)
+        if failure == "replace":
+            def fail_replace(*args):
+                raise OSError("Replacement failed")
+
+            monkeypatch.setattr(cache_helpers.os, "replace", fail_replace)
+            update = {"scores": {"one": 200}}
+        else:
+            update = {"scores": object()}
+
+        assert cache_helpers.save_scores_cache(update) is False
+
+        assert cache_helpers.load_scores_cache() == original
+        assert not list(tmp_path.glob("*.tmp"))

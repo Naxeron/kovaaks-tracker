@@ -10,8 +10,11 @@ import datetime
 import logging
 import time
 import concurrent.futures
+from urllib.parse import urlsplit
 
 import requests
+
+from .rate_limit import RequestPacer, parse_retry_after
 
 logger = logging.getLogger("kovaaks")
 
@@ -33,41 +36,106 @@ KOVAAKS_HEADERS = {
 # Retry wrapper
 # ---------------------------------------------------------------------------
 
+# Share a single request budget across bulk fetches, local score sync, and rank
+# lookups. This is conservative client pacing, not an assumed server quota.
+_KOVAAKS_PACER = RequestPacer()
+API_FETCH_WORKERS = 4
+
+
+class RequestCancelled(RuntimeError):
+    """A cancelled request must never be mistaken for an empty leaderboard."""
+
+
+def _check_cancelled(cancel_check):
+    if cancel_check and cancel_check():
+        raise RequestCancelled("Fetch cancelled")
+
+
+def _retry_wait(seconds, cancel_check=None):
+    """Allow cancellation during retries without changing ordinary sleeps."""
+    if cancel_check is None:
+        time.sleep(seconds)
+        return
+    remaining = seconds
+    while remaining > 0:
+        _check_cancelled(cancel_check)
+        step = min(0.1, remaining)
+        time.sleep(step)
+        remaining -= step
+    _check_cancelled(cancel_check)
+
+
 def api_request_with_retry(method, url, timeout=30, max_retries=3,
-                           session=None, **kwargs):
+                           session=None, cancel_check=None, **kwargs):
     """Make an HTTP request with retry on timeouts/5xx and exponential backoff.
 
     Handles:
     - 5xx server errors  → retry with backoff
     - Connection / timeout errors → retry with backoff
-    - 429 (rate-limit) → retry with backoff
+    - 429 (rate-limit) → shared cooldown and adaptive request pacing
     - Other 4xx client errors → raise immediately (no retry)
     """
     req_func = (getattr(session, method.lower()) if session
                 else getattr(requests, method.lower()))
+    hostname = (urlsplit(url).hostname or "").lower()
+    pacer = _KOVAAKS_PACER if hostname in ("kovaaks.com", "www.kovaaks.com") else None
 
     for attempt in range(max_retries + 1):
+        _check_cancelled(cancel_check)
+        if pacer is not None and not pacer.wait(cancel_check):
+            raise RequestCancelled("Fetch cancelled")
+        _check_cancelled(cancel_check)
         try:
             resp = req_func(url, timeout=timeout, **kwargs)
-            if resp.status_code < 500 or attempt == max_retries:
-                resp.raise_for_status()
-                if attempt > 0:
-                    logger.info("Recovered %s %s after %d retries",
-                                method.upper(), url, attempt)
-                return resp
-        except requests.exceptions.RequestException as e:
-            # Don't retry 4xx client errors (except 429 rate-limit)
-            if hasattr(e, "response") and e.response is not None:
-                if 400 <= e.response.status_code < 500 and e.response.status_code != 429:
+        except requests.exceptions.RequestException as error:
+            resp = error.response
+            # Some transports raise HTTPError directly. Keep 429 handling on
+            # the same path as a normal response so every worker is paused.
+            if resp is None or resp.status_code != 429:
+                if resp is not None and 400 <= resp.status_code < 500:
                     raise
+                if attempt == max_retries:
+                    raise
+                wait = min(60, 2 ** (attempt + 1))
+                logger.warning("Connection error %s; retrying %d/%d in %ds",
+                               error, attempt + 1, max_retries, wait)
+                _retry_wait(wait, cancel_check)
+                continue
+
+        if resp.status_code == 429:
+            hint = resp.headers.get("Retry-After")
+            if pacer is not None:
+                wait = pacer.record_rate_limit(hint)
+            else:
+                wait = max(parse_retry_after(hint) or 0, min(60, 2 ** (attempt + 1)))
+            # Even the last exhausted response must pause sibling requests.
             if attempt == max_retries:
-                raise
-            logger.warning("Connection error %s, retrying %d/%d...",
-                           e, attempt + 1, max_retries)
+                logger.warning("Rate limit (429) from %s; cooldown %.1fs; retries exhausted",
+                               hostname, wait)
+                resp.raise_for_status()
+            logger.warning("Rate limit (429) from %s; %scooldown %.1fs, retrying %d/%d",
+                           hostname, "shared " if pacer is not None else "", wait,
+                           attempt + 1, max_retries)
+            resp.close()
+            if pacer is None:
+                _retry_wait(wait, cancel_check)
+            # The next admission waits on the shared deadline. Independent
+            # sleeps here would let other workers keep hitting the same limit.
+            continue
+
+        if resp.status_code < 500 or attempt == max_retries:
+            resp.raise_for_status()
+            if pacer is not None:
+                pacer.record_success()
+            if attempt > 0:
+                logger.info("Recovered %s %s after %d retries", method.upper(), url, attempt)
+            return resp
 
         wait = min(60, 2 ** (attempt + 1))
-        logger.warning("Server error/timeout, retrying in %ds…", wait)
-        time.sleep(wait)
+        logger.warning("Server error %d; retrying %d/%d in %ds",
+                       resp.status_code, attempt + 1, max_retries, wait)
+        resp.close()
+        _retry_wait(wait, cancel_check)
     return None
 
 
@@ -75,30 +143,35 @@ def api_request_with_retry(method, url, timeout=30, max_retries=3,
 # KovaaKs-specific API functions
 # ---------------------------------------------------------------------------
 
-def get_accurate_entry_count(leaderboard_id, session=None):
+def get_accurate_entry_count(leaderboard_id, session=None, cancel_check=None):
     """Fetch the accurate 'total' entries from the global leaderboard endpoint."""
     url = "https://kovaaks.com/webapp-backend/leaderboard/scores/global"
     params = {"leaderboardId": leaderboard_id, "page": 0, "max": 1}
     try:
         resp = api_request_with_retry(
             "get", url, params=params, timeout=15,
-            max_retries=2, session=session)
+            max_retries=2, session=session,
+            **({"cancel_check": cancel_check} if cancel_check is not None else {}))
         if resp:
             data = resp.json()
             return int(data.get("total", 0))
+    except RequestCancelled:
+        raise
     except Exception as e:
         logger.debug("Failed to fetch accurate count for lid=%s: %s",
                      leaderboard_id, e)
     return None
 
 
-def kovaaks_login(username, password):
+def kovaaks_login(username, password, cancel_check=None):
     """Login to KovaaKs webapp, return JWT token string."""
     logger.debug("Logging in to KovaaKs as '%s'", username)
     url = "https://kovaaks.com/auth/webapp/login"
     credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
     headers = {**KOVAAKS_HEADERS, "Authorization": f"Basic {credentials}"}
-    resp = api_request_with_retry("post", url, headers=headers, data="", timeout=15)
+    resp = api_request_with_retry(
+        "post", url, headers=headers, data="", timeout=15,
+        **({"cancel_check": cancel_check} if cancel_check is not None else {}))
 
     data = resp.json()
     auth = data.get("auth", {})
@@ -118,7 +191,7 @@ def kovaaks_login(username, password):
 
 
 def kovaaks_get_friends_scores(token, leaderboard_id, session=None,
-                                timeout=30, max_retries=2):
+                                timeout=30, max_retries=2, cancel_check=None):
     """Fetch friends' scores for a given leaderboard ID."""
     url = "https://kovaaks.com/webapp-backend/leaderboard/scores/friends"
     headers = {**KOVAAKS_HEADERS, "Authorization": f"Bearer {token}"}
@@ -127,9 +200,10 @@ def kovaaks_get_friends_scores(token, leaderboard_id, session=None,
         "page": 0,
         "max": 50,
     }, headers=headers, timeout=timeout, max_retries=max_retries,
-       session=session)
+       session=session,
+       **({"cancel_check": cancel_check} if cancel_check is not None else {}))
     if resp is None:
-        return []
+        return None
     return resp.json().get("data", [])
 
 
@@ -146,7 +220,7 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, can
 
     if session is None:
         session = requests.Session()
-    adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+    adapter = requests.adapters.HTTPAdapter(pool_connections=API_FETCH_WORKERS, pool_maxsize=API_FETCH_WORKERS)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
 
@@ -155,14 +229,15 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, can
     start_time = time.time()
 
     # Single executor for the entire fetch (perf fix: was per-page before)
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=API_FETCH_WORKERS)
     try:
         while True:
-            if cancel_check:
-                cancel_check()
+            _check_cancelled(cancel_check)
             logger.debug("Fetching all scenarios page %d", page)
             params = {"page": page, "max": 100}
-            resp = api_request_with_retry("get", url, params=params, session=session)
+            resp = api_request_with_retry(
+                "get", url, params=params, session=session,
+                **({"cancel_check": cancel_check} if cancel_check is not None else {}))
             if resp is None:
                 break
             data = resp.json()
@@ -180,12 +255,12 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, can
             # Fetch accurate entry counts in parallel for the current page
             future_to_item = {
                 executor.submit(get_accurate_entry_count,
-                                it.get("leaderboardId"), session): it
+                                it.get("leaderboardId"), session,
+                                **({"cancel_check": cancel_check} if cancel_check is not None else {})): it
                 for it in items
             }
             for future in concurrent.futures.as_completed(future_to_item):
-                if cancel_check:
-                    cancel_check()
+                _check_cancelled(cancel_check)
                 item = future_to_item[future]
                 accurate_count = future.result()
                 if accurate_count is None:
@@ -245,10 +320,22 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
     """
     url = "https://kovaaks.com/webapp-backend/leaderboard/global/scores"
     user_lower = username.lower()
+    pages = {}
+
+    def get_page(page):
+        """Reuse successful responses within this lookup, never failed requests."""
+        if page not in pages:
+            response = api_request_with_retry(
+                "get", url, params={"page": page, "max": 100}, max_retries=3, session=session
+            )
+            if response:
+                pages[page] = response
+            return response
+        return pages[page]
     
     # 1. Quick check on the first page (top 100)
     try:
-        if resp := api_request_with_retry("get", url, params={"page": 0, "max": 100}, max_retries=3, session=session):
+        if resp := get_page(0):
             items = resp.json().get("data", [])
             for i, item in enumerate(items):
                 if user_lower in (item.get("webappUsername", "").lower(), item.get("steamAccountName", "").lower()):
@@ -264,11 +351,13 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
                     "user_official_points": local_points
                 }
     except Exception as e:
+        # A malformed response must not prevent the existing second attempt.
+        pages.pop(0, None)
         logger.warning("Failed to fetch top 100 for global leaderboard: %s", e)
 
     # 2. Binary search to locate user's page and exact preceding player's score
     try:
-        if resp := api_request_with_retry("get", url, params={"page": 0, "max": 100}, max_retries=3, session=session):
+        if resp := get_page(0):
             total_players = resp.json().get("total", 0)
             if total_players == 0:
                 return {"next_points": local_points, "user_official_points": None}
@@ -278,7 +367,7 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
             
             while low <= high:
                 mid = (low + high) // 2
-                if not (resp := api_request_with_retry("get", url, params={"page": mid, "max": 100}, max_retries=3, session=session)):
+                if not (resp := get_page(mid)):
                     break
                 items = resp.json().get("data", [])
                 if not items:
@@ -294,7 +383,7 @@ def get_next_leaderboard_position_points(username, local_points, session=None):
                             # Fetch last entry of previous page if user is rank 1 on this page
                             next_pts = None
                             try:
-                                if mid > 0 and (prev_resp := api_request_with_retry("get", url, params={"page": mid - 1, "max": 100}, max_retries=3, session=session)):
+                                if mid > 0 and (prev_resp := get_page(mid - 1)):
                                     prev_items = prev_resp.json().get("data", [])
                                     if prev_items:
                                         next_pts = _get_pts(prev_items[-1], user_pts)
@@ -464,4 +553,3 @@ def is_scenario_zombie(name, stats_dir, cached_zombies=None):
     except Exception as e:
         logger.warning("Error querying Steam Workshop for '%s': %s", name, e)
         return False  # Avoid false positives on connection errors
-

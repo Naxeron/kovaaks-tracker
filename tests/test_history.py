@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import kovaaks_web
+from kovaaks.scoring import prune_entry_history
 
 
 def _make_app_stub_for_history(entry_history=None):
@@ -20,6 +21,29 @@ def _make_app_stub_for_history(entry_history=None):
 
 
 class TestRecordHistoryPoints:
+    def test_recent_and_filtered_histories_are_bounded(self):
+        """Fresh imports and excluded scenarios must both obey retention."""
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        points = {(now - datetime.timedelta(hours=i, minutes=5)).isoformat(): i
+                  for i in range(200)}
+        app = _make_app_stub_for_history({"selected": dict(points), "filtered": dict(points)})
+
+        app._record_history_points([{"leaderboardId": "selected", "counts": {"entries": 5000}}])
+
+        expected = set(sorted(points)[-168:])
+        assert set(app._scores_cache["entry_history"]["selected"]) == expected
+        assert set(app._scores_cache["entry_history"]["filtered"]) == expected
+        assert app._scores_cache["entry_history"]["selected"][max(points)] == 5000
+        assert app._scores_cache["_dirty"] is True
+
+    def test_unchanged_within_hour_does_not_mark_dirty(self):
+        stamp = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
+        app = _make_app_stub_for_history({"one": {stamp: 1500}})
+
+        app._record_history_points([{"leaderboardId": "one", "counts": {"entries": 1500}}])
+
+        assert "_dirty" not in app._scores_cache
+
     def test_records_new_lid(self):
         app = _make_app_stub_for_history()
         scenarios = [{"leaderboardId": "lid-1", "counts": {"entries": 5000}}]
@@ -126,3 +150,14 @@ class TestRecordHistoryPoints:
         assert len(history) == 3
         for lid in ["lid-1", "lid-2", "lid-3"]:
             assert lid in history
+
+
+def test_pruning_discards_invalid_and_future_samples_and_is_idempotent():
+    now = datetime.datetime(2026, 9, 30, 12)
+    past = (now - datetime.timedelta(hours=2)).isoformat()
+    future = (now + datetime.timedelta(hours=2)).isoformat()
+    history = {"one": {past: 10, future: 20, "invalid": 30}}
+
+    assert prune_entry_history(history, now) is True
+    assert history == {"one": {past: 10}}
+    assert prune_entry_history(history, now) is False

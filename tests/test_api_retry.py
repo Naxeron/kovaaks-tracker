@@ -162,6 +162,10 @@ class TestKovaaksLogin:
 # ---------------------------------------------------------------------------
 
 class TestKovaaksGetFriendsScores:
+    @patch("kovaaks.api.api_request_with_retry", return_value=None)
+    def test_missing_response_is_not_an_authoritative_empty_leaderboard(self, mock_req):
+        assert kovaaks_get_friends_scores("fake-token", "lid-1") is None
+
     @patch("kovaaks.api.api_request_with_retry")
     def test_returns_data_list(self, mock_req, mock_friends_response):
         resp = MagicMock()

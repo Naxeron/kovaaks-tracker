@@ -145,7 +145,7 @@ def test_cancelled_fetch_discards_late_worker_result(monkeypatch, blocked_stage)
         entered.set()
         assert release.wait(timeout=3), "Test did not release the blocked worker"
 
-    def fetch_scores(token, lid, session):
+    def fetch_scores(token, lid, session, **kwargs):
         if lid == "slow":
             if blocked_stage == "request":
                 block_worker()
@@ -170,7 +170,7 @@ def test_cancelled_fetch_discards_late_worker_result(monkeypatch, blocked_stage)
     save = MagicMock()
     monkeypatch.setattr(fetch_worker, "fetch_gzip_json_from_github",
                         MagicMock(side_effect=[scenarios, None]))
-    monkeypatch.setattr(fetch_worker, "kovaaks_login", lambda *_: "token")
+    monkeypatch.setattr(fetch_worker, "kovaaks_login", lambda *_, **__: "token")
     monkeypatch.setattr(fetch_worker, "kovaaks_get_friends_scores", fetch_scores)
     monkeypatch.setattr(fetch_worker, "parse_leaderboard_entries", parse_scores)
     monkeypatch.setattr(fetch_worker, "save_scores_cache", save)
@@ -228,7 +228,7 @@ def test_refresh_removes_only_authoritatively_missing_scores(
     }]
     monkeypatch.setattr(fetch_worker, "fetch_gzip_json_from_github",
                         MagicMock(side_effect=[scenarios, None]))
-    monkeypatch.setattr(fetch_worker, "kovaaks_login", lambda *_: "token")
+    monkeypatch.setattr(fetch_worker, "kovaaks_login", lambda *_, **__: "token")
     monkeypatch.setattr(fetch_worker, "kovaaks_get_friends_scores", lambda *_, **__: response)
     monkeypatch.setattr(fetch_worker, "save_scores_cache", MagicMock())
 
@@ -311,7 +311,7 @@ def test_cancellation_finishes_existing_callback_before_next_fetch(monkeypatch):
     app._update_status.side_effect = update_status
     monkeypatch.setattr(fetch_worker, "fetch_gzip_json_from_github",
                         MagicMock(side_effect=[scenarios, None]))
-    monkeypatch.setattr(fetch_worker, "kovaaks_login", lambda *_: "token")
+    monkeypatch.setattr(fetch_worker, "kovaaks_login", lambda *_, **__: "token")
     monkeypatch.setattr(fetch_worker, "kovaaks_get_friends_scores", lambda *_, **__: [])
     monkeypatch.setattr(fetch_worker, "save_scores_cache", MagicMock())
     monkeypatch.setattr(fetch_worker.concurrent.futures, "as_completed", completed_after_cancel)

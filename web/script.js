@@ -13,6 +13,23 @@ let initialFetchTriggered = false;
 let currentAutoHiddenColumns = [];
 let settingsCredentialUsername = '';
 let settingsHasPassword = false;
+let searchRenderTimer = null;
+let sortKeyData = null;
+let sortKeyRows = null;
+let sortKeyColumns = null;
+let sortKeyCache = new Map();
+let activeDataFetch = null;
+let dataRefreshQueued = false;
+let dataLoadingShown = false;
+let rankStatsRequest = 0;
+
+function scheduleSearchRender() {
+    if (searchRenderTimer !== null) clearTimeout(searchRenderTimer);
+    searchRenderTimer = setTimeout(() => {
+        searchRenderTimer = null;
+        renderTable();
+    }, 120);
+}
 
 function clearPasswordInput(prefix) {
     const input = document.getElementById(`${prefix}-password`);
@@ -436,7 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    document.getElementById('search-input').addEventListener('input', renderTable);
+    document.getElementById('search-input').addEventListener('input', scheduleSearchRender);
     
     let lastScrollCheck = 0;
     let scrollThrottleTimeout = null;
@@ -886,10 +903,42 @@ async function startFetch(silent = false) {
     }
 }
 
-async function fetchData(silent = false) {
-    if (!silent) {
+function fetchData(silent = false) {
+    if (!silent && !dataLoadingShown) {
+        dataLoadingShown = true;
         setLoading(true, "Loading data...");
     }
+    if (activeDataFetch) {
+        dataRefreshQueued = true;
+        return activeDataFetch;
+    }
+
+    // Keep one refresh in flight and retain one request for changes arriving
+    // while it runs. All callers wait until the latest requested data is shown.
+    activeDataFetch = Promise.resolve().then(async () => {
+        try {
+            do {
+                try {
+                    await fetchDataOnce();
+                } catch (err) {
+                    console.error(err);
+                    setStatus("Error loading data.");
+                }
+                if (!dataRefreshQueued) break;
+                dataRefreshQueued = false;
+            } while (true);
+        } finally {
+            activeDataFetch = null;
+            if (dataLoadingShown) {
+                dataLoadingShown = false;
+                setLoading(false);
+            }
+        }
+    });
+    return activeDataFetch;
+}
+
+async function fetchDataOnce() {
     if (window.pywebview && window.pywebview.api) {
         try {
             const cfg = await window.pywebview.api.get_config();
@@ -923,6 +972,7 @@ async function fetchData(silent = false) {
             }
             
             renderTable();
+            refreshGlobalRankStats();
             setStatus("Ready");
         } catch (err) {
             console.error(err);
@@ -939,15 +989,84 @@ async function fetchData(silent = false) {
             global_stats: { points: 1000, potential_points: 2000, projected_gain: 500, total_rows: 2 }
         };
         renderTable();
+        refreshGlobalRankStats();
     }
-    if (!silent) {
-        setLoading(false);
+}
+
+async function refreshGlobalRankStats() {
+    const request = ++rankStatsRequest;
+    if (window.currentConfig?.always_show_total_points === false ||
+            !currentData.columns?.length || !window.pywebview?.api) return;
+
+    const fields = ['stat-next-rank', 'stat-live-gap', 'stat-scenarios-left',
+        'stat-current-pct', 'stat-required-pct'];
+    const setField = (id, value) => {
+        const field = document.getElementById(id);
+        if (field) field.textContent = value;
+    };
+    fields.forEach(id => setField(id, 'Loading...'));
+    try {
+        const nextRank = await window.pywebview.api.get_next_rank_points();
+        if (request !== rankStatsRequest) return;
+        setField('stat-next-rank', nextRank);
+        const values = await window.pywebview.api.get_scenarios_left_to_next_rank();
+        if (request !== rankStatsRequest) return;
+        setField('stat-live-gap', values?.live_gap || 'N/A');
+        setField('stat-scenarios-left', values && typeof values === 'object'
+            ? values.count || 'N/A' : values || 'N/A');
+        setField('stat-current-pct', values?.global_avg_pct || 'N/A');
+        setField('stat-required-pct', values?.required_avg_pct || 'N/A');
+    } catch (err) {
+        console.error(err);
+        if (request === rankStatsRequest) {
+            fields.forEach(id => setField(id, 'N/A'));
+        }
     }
+}
+
+function getSortKey(val) {
+    if (typeof val === 'number') {
+        return isNaN(val) ? { type: 2, val: "" } : { type: 0, val: val };
+    }
+    const s = String(val === null || val === undefined ? "" : val).trim();
+    if (!s) {
+        return { type: 2, val: "" };
+    }
+    let clean = s.replace(/,/g, '');
+    if (clean.endsWith('%')) {
+        clean = clean.slice(0, -1);
+    }
+    if (clean.startsWith('+')) {
+        clean = clean.slice(1);
+    }
+    const isNumeric = /^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(clean);
+    if (isNumeric) {
+        const num = parseFloat(clean);
+        if (!isNaN(num)) {
+            return { type: 0, val: num };
+        }
+    }
+    return { type: 1, val: s.toLowerCase() };
+}
+
+function getColumnSortKeys(column) {
+    if (sortKeyData !== currentData || sortKeyRows !== currentData.rows ||
+            sortKeyColumns !== currentData.columns) {
+        sortKeyData = currentData;
+        sortKeyRows = currentData.rows;
+        sortKeyColumns = currentData.columns;
+        sortKeyCache = new Map();
+    }
+    if (!sortKeyCache.has(column)) {
+        sortKeyCache.set(column, new Map(currentData.rows.map(row =>
+            [row, getSortKey(row[column])])));
+    }
+    return sortKeyCache.get(column);
 }
 
 function getFilteredAndSortedRows(includeZombies) {
     if (!currentData || !currentData.rows) return [];
-    let rows = [...currentData.rows];
+    let rows = currentData.rows;
     const searchTerm = document.getElementById('search-input').value.toLowerCase();
     const colIndex = {};
     currentData.columns.forEach((c, i) => colIndex[c] = i);
@@ -984,34 +1103,11 @@ function getFilteredAndSortedRows(includeZombies) {
     });
 
     if (sortCol !== -1) {
-        const getSortKey = (val) => {
-            if (typeof val === 'number') {
-                return isNaN(val) ? { type: 2, val: "" } : { type: 0, val: val };
-            }
-            const s = String(val === null || val === undefined ? "" : val).trim();
-            if (!s) {
-                return { type: 2, val: "" };
-            }
-            let clean = s.replace(/,/g, '');
-            if (clean.endsWith('%')) {
-                clean = clean.slice(0, -1);
-            }
-            if (clean.startsWith('+')) {
-                clean = clean.slice(1);
-            }
-            const isNumeric = /^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(clean);
-            if (isNumeric) {
-                const num = parseFloat(clean);
-                if (!isNaN(num)) {
-                    return { type: 0, val: num };
-                }
-            }
-            return { type: 1, val: s.toLowerCase() };
-        };
+        const sortKeys = getColumnSortKeys(sortCol);
 
         rows.sort((a, b) => {
-            const keyA = getSortKey(a[sortCol]);
-            const keyB = getSortKey(b[sortCol]);
+            const keyA = sortKeys.get(a);
+            const keyB = sortKeys.get(b);
 
             // Empty values (type 2) always go to the bottom
             if (keyA.type === 2 && keyB.type !== 2) return 1;
@@ -1033,6 +1129,10 @@ function getFilteredAndSortedRows(includeZombies) {
 }
 
 function renderTable() {
+    if (searchRenderTimer !== null) {
+        clearTimeout(searchRenderTimer);
+        searchRenderTimer = null;
+    }
     const table = document.getElementById('data-table');
     const thead = table.querySelector('thead tr');
     const tbody = table.querySelector('tbody');
@@ -1163,29 +1263,6 @@ function renderTable() {
         if (alwaysShow !== false) {
             document.getElementById('stat-points').textContent = currentData.global_stats.points.toLocaleString();
             document.getElementById('stat-potential').textContent = currentData.global_stats.potential_points.toLocaleString();
-            document.getElementById('stat-next-rank').textContent = 'Loading...';
-            if (document.getElementById('stat-live-gap')) document.getElementById('stat-live-gap').textContent = 'Loading...';
-            document.getElementById('stat-scenarios-left').textContent = 'Loading...';
-            document.getElementById('stat-current-pct').textContent = 'Loading...';
-            document.getElementById('stat-required-pct').textContent = 'Loading...';
-            if (window.pywebview && window.pywebview.api) {
-                window.pywebview.api.get_next_rank_points().then(res => {
-                    document.getElementById('stat-next-rank').textContent = res;
-                    window.pywebview.api.get_scenarios_left_to_next_rank().then(valDict => {
-                        if (valDict && typeof valDict === 'object') {
-                            if (document.getElementById('stat-live-gap')) document.getElementById('stat-live-gap').textContent = valDict.live_gap || 'N/A';
-                            document.getElementById('stat-scenarios-left').textContent = valDict.count || 'N/A';
-                            document.getElementById('stat-current-pct').textContent = valDict.global_avg_pct || 'N/A';
-                            document.getElementById('stat-required-pct').textContent = valDict.required_avg_pct || 'N/A';
-                        } else {
-                            if (document.getElementById('stat-live-gap')) document.getElementById('stat-live-gap').textContent = 'N/A';
-                            document.getElementById('stat-scenarios-left').textContent = valDict || 'N/A';
-                            document.getElementById('stat-current-pct').textContent = 'N/A';
-                            document.getElementById('stat-required-pct').textContent = 'N/A';
-                        }
-                    });
-                });
-            }
         } else {
             let pts = 0;
             let pot = 0;
@@ -1296,6 +1373,12 @@ window.updateProgress = function(current, total, message) {
 
 window.fetchData = fetchData;
 window.setStatus = setStatus;
+window.onRankStatsUpdated = function(username) {
+    if (!window.currentConfig || window.currentConfig.username !== username ||
+            window.currentConfig.always_show_total_points === false) return;
+    // Invalidate older bridge responses before requesting the fresh cache value.
+    return refreshGlobalRankStats();
+};
 
 window.onLocalScoreDetected = function(scenarioName) {
     if (autoplayActive && autoplayCurrentScenario && scenarioName === autoplayCurrentScenario) {
@@ -1317,6 +1400,8 @@ window.onZombieDetected = function(scenarioName) {
 
 function autoplayAdvance() {
     if (!autoplayActive) return;
+    // A score event must advance immediately using the latest search text.
+    if (searchRenderTimer !== null) renderTable();
     if (filteredRows.length === 0) {
         if (window.pywebview && window.pywebview.api) {
             window.pywebview.api.update_status("Autoplay: no scenarios in list");

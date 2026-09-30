@@ -18,11 +18,11 @@ from copy import deepcopy
 from kovaaks.constants import MIN_ENTRIES
 from kovaaks.config_helpers import load_config
 from kovaaks import credentials
-from kovaaks.cache import load_scores_cache, load_scenarios_from_cache, save_scores_cache, SCORES_CACHE
-from kovaaks.scoring import calculate_potential_score
+from kovaaks.cache import CacheWriter, load_scores_cache, load_scenarios_from_cache, save_scores_cache, SCORES_CACHE
+from kovaaks.scoring import calculate_potential_score, prune_entry_history
 from kovaaks.stats import get_local_stats as _get_local_stats
 from kovaaks.fetch_worker import run_fetch_all
-from kovaaks.data_processing import safe_int
+from kovaaks.data_processing import safe_int, safe_float
 
 from kovaaks.logging_helpers import setup_logging
 
@@ -72,6 +72,12 @@ class KovaaksAPI:
         self._credential_warning = False
         self._credential_generation = 0
         self._scores_cache = {}
+        self._cache_writer = CacheWriter(
+            self._cache_snapshot, save=self._persist_cache_snapshot,
+            synchronous="pytest" in sys.modules,
+        )
+        self._next_rank_lock = threading.Lock()
+        self._next_rank_requests = {}
         self._scenario_info = {}
         self._user_by_lid = {}
         self._friends_by_lid = {}
@@ -203,9 +209,11 @@ class KovaaksAPI:
             played, unplayed = self._rebuild_data()
             status = f"Rebuilt from memory cache — {len(played)} played, {len(unplayed)} unplayed"
 
-            # Save the updated scores cache in case get_local_stats added new local runs
-            if self._scores_cache.pop("_dirty", False) and not getattr(self, "_cache_corrupted", False):
-                save_scores_cache(self._scores_cache)
+            # Save the updated scores cache in case get_local_stats added new local runs.
+            # Publish readiness before compression so cached rows are usable immediately.
+            self._cache_loaded_event.set()
+            if self._scores_cache.pop("_dirty", False):
+                self._queue_cache_save()
         except Exception:
             logger.exception("Background cache load failed")
             status = "Could not load cached data. Check the logs and refresh to retry."
@@ -255,6 +263,42 @@ class KovaaksAPI:
         if self.window:
             self.window.evaluate_js(f"if(window.updateProgress) window.updateProgress({current}, {total})")
 
+    def _cache_snapshot(self):
+        """Detach a consistent snapshot before the writer performs compression."""
+        with self._data_lock:
+            if getattr(self, "_cache_corrupted", False):
+                return None
+            return deepcopy(self._scores_cache)
+
+    def _queue_cache_save(self, wait=False):
+        """Serialize saves and coalesce pending updates; wait outside data locks."""
+        if getattr(self, "_cache_corrupted", False):
+            return False
+        saved = self._cache_writer.request(wait=wait)
+        if not saved:
+            with self._data_lock:
+                self._scores_cache["_dirty"] = True
+        return saved
+
+    def _persist_cache_snapshot(self, snapshot):
+        """Retain dirty state on asynchronous failures so later refreshes retry."""
+        saved = False
+        try:
+            saved = save_scores_cache(snapshot) is not False
+            return saved
+        finally:
+            if not saved:
+                with self._data_lock:
+                    self._scores_cache["_dirty"] = True
+
+    def _flush_cache_saves(self):
+        """Wait for already requested saves without scheduling another rewrite."""
+        saved = self._cache_writer.flush()
+        if not saved:
+            with self._data_lock:
+                self._scores_cache["_dirty"] = True
+        return saved
+
     def _load_cache_and_populate(self):
         """Load the unified JSON cache and populate tabs with cached data."""
         if not self._scores_cache:
@@ -263,6 +307,8 @@ class KovaaksAPI:
             self._scores_cache = load_scores_cache()
             if cache_exists and not self._scores_cache:
                 self._cache_corrupted = True
+            if prune_entry_history(self._scores_cache.get("entry_history", {})):
+                self._scores_cache["_dirty"] = True
 
         self._zombies = set(self._scores_cache.setdefault("zombies", []))
         all_scenarios = load_scenarios_from_cache(self._scores_cache)
@@ -565,13 +611,8 @@ class KovaaksAPI:
         now_str = now.isoformat()
         history = self._scores_cache.get("entry_history", {})
 
-        for lid, points in history.items():
-            for k in list(points.keys()):
-                try:
-                    if (_parse_iso_dt(k) - now).total_seconds() > 3600:
-                        del points[k]
-                except ValueError:
-                    pass
+        # Trim imported samples for every scenario before the within-hour fast path.
+        changed = prune_entry_history(history, now)
 
         total_scenarios = len(scenarios_list)
         for idx, s in enumerate(scenarios_list):
@@ -585,24 +626,33 @@ class KovaaksAPI:
                 latest_key = max(lid_history.keys())
                 try:
                     if (now - _parse_iso_dt(latest_key)).total_seconds() < 3600:
+                        changed = lid_history[latest_key] != entries or changed
                         lid_history[latest_key] = entries
                         continue
                 except ValueError:
                     pass
             lid_history[now_str] = entries
-            while len(lid_history) > 168:
-                del lid_history[min(lid_history.keys())]
+            changed = True
+            if len(lid_history) > 168:
+                for stamp in sorted(lid_history)[:-168]:
+                    del lid_history[stamp]
             
             if idx % 1000 == 0 and hasattr(self, "_update_progress"):
                 progress = 0.15 + 0.07 * (idx / total_scenarios if total_scenarios > 0 else 0)
                 self._update_progress(progress, 1.0)
 
         self._scores_cache["entry_history"] = history
+        if changed:
+            self._scores_cache["_dirty"] = True
 
     def get_data(self, min_entries, show_hidden=False):
         self._cache_loaded_event.wait()
         with self._data_lock:
-            return self._get_loaded_data(min_entries, show_hidden)
+            result = self._get_loaded_data(min_entries, show_hidden)
+            dirty = self._scores_cache.pop("_dirty", False)
+        if dirty:
+            self._queue_cache_save()
+        return result
 
     def _get_loaded_data(self, min_entries, show_hidden):
         """Serialize filter changes, local parsing, and global-stat snapshots."""
@@ -614,12 +664,6 @@ class KovaaksAPI:
         try:
             self._load_cache_and_populate()
             played, unplayed = self._rebuild_data()
-            if self._scores_cache.pop("_dirty", False) and not getattr(self, "_cache_corrupted", False):
-                snapshot = deepcopy(self._scores_cache)
-                if "pytest" in sys.modules:
-                    save_scores_cache(snapshot)
-                else:
-                    threading.Thread(target=save_scores_cache, args=(snapshot,), daemon=True).start()
             all_data = played + unplayed
             
             if not all_data:
@@ -654,91 +698,100 @@ class KovaaksAPI:
             return {"columns": [], "rows": [], "global_stats": {}}
 
     def get_next_rank_points(self):
-        try:
-            current_points = getattr(self, '_global_points_sum', 0)
-            if current_points <= 0:
-                return "N/A"
+        """Share one rank lookup per account and serve stale values during refresh."""
+        from concurrent.futures import Future
+        from kovaaks.api import get_next_leaderboard_position_points
+
+        current_points = getattr(self, '_global_points_sum', 0)
+        if current_points <= 0:
+            return "N/A"
+        with self._credentials_lock:
             username = self._cfg.get("username", "").strip()
-            if not username:
-                return "N/A (No Username)"
-            
+            generation = self._credential_generation
+        if not username:
+            return "N/A (No Username)"
+        key = (username, generation)
+
+        def number(value):
+            value = safe_float(value, None)
+            return value if value is not None and math.isfinite(value) else None
+
+        def display(points, official):
+            diff = int(points - (official if official is not None else current_points))
+            return f"+{diff:,}" if diff > 0 else "Rank 1!"
+
+        with self._next_rank_lock:
             cached = self._scores_cache.get("next_rank", {})
-            cached_pts = cached.get("points")
-            cached_user_pts = cached.get("user_official_points")
-            cached_user = cached.get("username")
-            cached_time = cached.get("timestamp", 0)
-            
-            import time
-            now = time.time()
-            
-            def fetch_and_update():
+            if not isinstance(cached, dict):
+                cached = {}
+            cached_points = number(cached.get("points"))
+            cached_official = number(cached.get("user_official_points"))
+            valid = (cached.get("username") == username
+                     and cached_points is not None and cached_official is not None)
+            cached_display = display(cached_points, cached_official) if valid else None
+            if valid and time.time() - (number(cached.get("timestamp")) or 0) <= 3600:
+                return cached_display
+            future = self._next_rank_requests.get(key)
+            owner = future is None
+            if owner:
+                future = Future()
+                self._next_rank_requests[key] = future
+
+        def fetch_and_update():
+            result = "Error"
+            try:
+                res = get_next_leaderboard_position_points(username, current_points)
+                raw_points = res.get("next_points") if isinstance(res, dict) else res
+                raw_official = res.get("user_official_points") if isinstance(res, dict) else None
+                points, official = number(raw_points), number(raw_official)
+                if ((raw_points is not None and points is None)
+                        or (raw_official is not None and official is None)):
+                    raise ValueError("Invalid global leaderboard points")
+                with self._credentials_lock:
+                    if (self._credential_generation != generation
+                            or self._cfg.get("username", "").strip() != username):
+                        result = "N/A"
+                        return
+                    if points is not None:
+                        with self._data_lock:
+                            self._scores_cache["next_rank"] = {
+                                "username": username, "points": points,
+                                "user_official_points": official, "timestamp": time.time(),
+                            }
+                        result = display(points, official)
+                        self._queue_cache_save()
+                    else:
+                        result = "Rank 1!"
+                    # Background refreshes update the labels once, independently
+                    # of filtering, sorting, and column visibility changes.
+                    if valid and self.window and points is not None:
+                        # The JS hook invalidates older pending bridge responses
+                        # and checks both the active account and display mode.
+                        self.window.evaluate_js(
+                            "if(window.onRankStatsUpdated) { "
+                            f"void window.onRankStatsUpdated({json.dumps(username)}); }}"
+                        )
+            except Exception:
+                logger.warning("Error fetching next rank points", exc_info=True)
+            finally:
+                future.set_result(result)
+                with self._next_rank_lock:
+                    if self._next_rank_requests.get(key) is future:
+                        del self._next_rank_requests[key]
+
+        if owner:
+            if valid:
                 try:
-                    import kovaaks.api as api
-                    res = api.get_next_leaderboard_position_points(username, current_points)
-                    next_points = res.get("next_points") if isinstance(res, dict) else res
-                    user_off_pts = res.get("user_official_points") if isinstance(res, dict) else None
-                    
-                    if next_points and (user_off_pts is None or next_points >= user_off_pts):
-                        self._scores_cache["next_rank"] = {
-                            "username": username,
-                            "points": next_points,
-                            "user_official_points": user_off_pts,
-                            "timestamp": time.time()
-                        }
-                        if not getattr(self, "_cache_corrupted", False):
-                            save_scores_cache(self._scores_cache)
-                        
-                        base_pts = user_off_pts if user_off_pts is not None else current_points
-                        diff = int(next_points - base_pts)
-                        display_str = f"+{diff:,}" if diff > 0 else "Rank 1!"
-                        
-                        if hasattr(self, 'window') and self.window:
-                            self.window.evaluate_js(f"if(document.getElementById('stat-next-rank')) document.getElementById('stat-next-rank').textContent = {json.dumps(display_str)};")
-                            val_dict = self.get_scenarios_left_to_next_rank()
-                            self.window.evaluate_js(f"""
-                                if(document.getElementById('stat-scenarios-left')) document.getElementById('stat-scenarios-left').textContent = {json.dumps(val_dict.get('count'))};
-                                if(document.getElementById('stat-live-gap')) document.getElementById('stat-live-gap').textContent = {json.dumps(val_dict.get('live_gap'))};
-                                if(document.getElementById('stat-current-pct')) document.getElementById('stat-current-pct').textContent = {json.dumps(val_dict.get('global_avg_pct'))};
-                                if(document.getElementById('stat-required-pct')) document.getElementById('stat-required-pct').textContent = {json.dumps(val_dict.get('required_avg_pct'))};
-                            """)
-                except Exception as e:
-                    logger.warning("Background next rank fetch failed: %s", e)
-
-            # If cache is valid for this user and official user points are cached
-            if cached_user == username and cached_pts and cached_user_pts is not None:
-                base_pts = cached_user_pts if cached_user_pts is not None else current_points
-                diff = int(cached_pts - base_pts)
-                if diff <= 0:
-                    return "Rank 1!"
-                
-                # Refresh in background if older than 1 hour to keep threshold reasonably fresh
-                if now - cached_time > 3600:
-                    import threading
                     threading.Thread(target=fetch_and_update, daemon=True).start()
-                return f"+{diff:,}"
-
-            # Cache miss or invalid, fetch synchronously
-            import kovaaks.api as api
-            res = api.get_next_leaderboard_position_points(username, current_points)
-            next_points = res.get("next_points") if isinstance(res, dict) else res
-            user_off_pts = res.get("user_official_points") if isinstance(res, dict) else None
-            
-            if next_points:
-                self._scores_cache["next_rank"] = {
-                    "username": username,
-                    "points": next_points,
-                    "user_official_points": user_off_pts,
-                    "timestamp": now
-                }
-                save_scores_cache(self._scores_cache)
-                base_pts = user_off_pts if user_off_pts is not None else current_points
-                diff = int(next_points - base_pts)
-                return f"+{diff:,}" if diff > 0 else "Rank 1!"
+                except Exception:
+                    with self._next_rank_lock:
+                        self._next_rank_requests.pop(key, None)
+                    future.set_result("Error")
+                    logger.warning("Could not start rank refresh", exc_info=True)
             else:
-                return "Rank 1!"
-        except Exception as e:
-            logger.warning("Error fetching next rank points: %s", e)
-            return "Error"
+                # pywebview bridge calls already run outside the GUI thread.
+                fetch_and_update()
+        return cached_display if valid and not future.done() else future.result()
 
     def get_scenarios_left_to_next_rank(self):
         try:
@@ -889,6 +942,9 @@ class KovaaksAPI:
             try:
                 with self._data_lock:
                     saved = self._save_settings(settings)
+                    dirty = self._scores_cache.pop("_dirty", False)
+                if dirty:
+                    self._queue_cache_save()
             except OSError:
                 return self._credential_result(False, "Could not save settings. Check file permissions and try again.")
             if not saved:
@@ -916,8 +972,7 @@ class KovaaksAPI:
             self._scores_cache["local_stats"] = {}
             self._scores_cache["newly_played_scenarios"] = []
             self._local_stats_cache = {}
-            if not getattr(self, "_cache_corrupted", False):
-                save_scores_cache(self._scores_cache)
+            self._scores_cache["_dirty"] = True
             self._invalidate_local_stats()
             self._start_file_watcher()
         return saved
@@ -1130,10 +1185,14 @@ class KovaaksAPI:
                             download_failed = True
 
                 if is_zombie or download_failed:
-                    if norm_name not in self._zombies:
-                        self._zombies.add(norm_name)
-                        self._scores_cache["zombies"] = list(self._zombies)
-                        save_scores_cache(self._scores_cache)
+                    changed = False
+                    with self._data_lock:
+                        if norm_name not in self._zombies:
+                            self._zombies.add(norm_name)
+                            self._scores_cache["zombies"] = list(self._zombies)
+                            changed = True
+                    if changed:
+                        self._queue_cache_save()
                     
                     reason = "deleted from Steam Workshop" if is_zombie else "download failed or timed out"
                     self._update_status(f"Error: '{name}' has {reason}.")
@@ -1424,10 +1483,14 @@ class KovaaksAPI:
 
         updated = False
         import requests
-        from kovaaks.api import kovaaks_get_friends_scores
+        from kovaaks.api import RequestCancelled, kovaaks_get_friends_scores
         from kovaaks.data_processing import parse_leaderboard_entries
 
         session = requests.Session()
+        def sync_cancelled():
+            with self._credentials_lock:
+                return generation != self._credential_generation
+
         for lid, expected_score in lids_to_update.items():
             max_attempts = 5
             for attempt in range(max_attempts):
@@ -1437,7 +1500,7 @@ class KovaaksAPI:
                 try:
                     data = kovaaks_get_friends_scores(
                         token, lid, session=session,
-                        timeout=10, max_retries=2)
+                        timeout=10, max_retries=2, cancel_check=sync_cancelled)
                     
                     user_entry, friend_entries = parse_leaderboard_entries(data, username)
                     
@@ -1458,7 +1521,7 @@ class KovaaksAPI:
                                 pass
                             
                     if target_met or attempt == max_attempts - 1:
-                        with self._credentials_lock:
+                        with self._credentials_lock, self._data_lock:
                             if generation != self._credential_generation:
                                 return
                             if user_entry:
@@ -1482,7 +1545,14 @@ class KovaaksAPI:
                         retry_wait = min(4, attempt + 1)
                         logger.debug("Score for lid=%s not updated yet in API, retrying (%d/%d) in %ds...", lid, attempt+1, max_attempts, retry_wait)
                         time.sleep(retry_wait)
+                except RequestCancelled:
+                    return
                 except Exception as e:
+                    if isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 429:
+                        # The HTTP helper already exhausted bounded retries and
+                        # paused the shared budget. Do not restart that cycle.
+                        logger.info("Auto-sync deferred for lid=%s after rate limiting; cached scores kept.", lid)
+                        break
                     if isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 401:
                         logger.warning("Session expired during auto-update. Attempting re-login.")
                         with self._credentials_lock:
@@ -1507,11 +1577,7 @@ class KovaaksAPI:
             if self.window:
                 self.window.evaluate_js("if(window.fetchData) window.fetchData()")
             # Save the updated scores cache in the background (non-blocking)
-            threading.Thread(
-                target=save_scores_cache,
-                args=(self._scores_cache,),
-                daemon=True
-            ).start()
+            self._queue_cache_save()
 
 
 
@@ -1537,4 +1603,8 @@ if __name__ == "__main__":
             gui_backend = sys.argv[idx + 1]
         except (ValueError, IndexError):
             pass
-    webview.start(gui=gui_backend, debug=False)
+    try:
+        webview.start(gui=gui_backend, debug=False)
+    finally:
+        if not api._flush_cache_saves():
+            api._queue_cache_save(wait=True)

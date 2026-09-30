@@ -15,7 +15,7 @@ import requests
 
 # Add parent directory to path for module imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from kovaaks.api import api_request_with_retry, get_accurate_entry_count
+from kovaaks.api import API_FETCH_WORKERS, api_request_with_retry, get_accurate_entry_count
 from kovaaks.data_processing import safe_int
 
 # Configure logging
@@ -33,12 +33,13 @@ def fetch_all_scenarios(pages_limit=0, entries_limit=100, existing_scenarios=Non
     session = requests.Session()
     
     # Increase connection pool size to match max_workers in ThreadPoolExecutor
-    adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=API_FETCH_WORKERS, pool_maxsize=API_FETCH_WORKERS)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     
     # Single executor for the entire fetch (perf: was per-page before)
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=API_FETCH_WORKERS)
     try:
         while True:
             if pages_limit > 0 and page >= pages_limit:

@@ -98,3 +98,73 @@ def test_get_next_leaderboard_position_points_error(mock_req):
     
     with pytest.raises(Exception, match="API rate limited or down"):
         api.get_next_leaderboard_position_points("testuser", 4000)
+
+
+@patch('kovaaks.api.api_request_with_retry')
+def test_binary_search_fetches_each_page_once(mock_req):
+    def response_for_page(method, url, params, **kwargs):
+        page = params["page"]
+        response = MagicMock()
+        response.json.return_value = {
+            "total": 500,
+            "data": [{"webappUsername": f"p{page}-{i}", "points": 5000 - page * 1000 - i * 10}
+                     for i in range(100)],
+        }
+        return response
+
+    mock_req.side_effect = response_for_page
+    session = MagicMock()
+
+    result = api.get_next_leaderboard_position_points("testuser", 2505, session=session)
+
+    assert result == {"next_points": 2510, "user_official_points": None}
+    assert [call.kwargs["params"]["page"] for call in mock_req.call_args_list] == [0, 2]
+    assert all(call.kwargs["session"] is session for call in mock_req.call_args_list)
+
+
+@patch('kovaaks.api.api_request_with_retry')
+def test_page_boundary_reuses_previous_page(mock_req):
+    first = MagicMock()
+    first.json.return_value = {"total": 200, "data": [
+        {"webappUsername": f"p{i}", "points": 5000 - i * 10} for i in range(100)
+    ]}
+    second = MagicMock()
+    second.json.return_value = {"total": 200, "data": [
+        {"webappUsername": "testuser", "points": 4000}
+    ]}
+    mock_req.side_effect = [first, second]
+
+    assert api.get_next_leaderboard_position_points("testuser", 4000) == {
+        "next_points": 4010, "user_official_points": 4000,
+    }
+    assert [call.kwargs["params"]["page"] for call in mock_req.call_args_list] == [0, 1]
+
+
+@pytest.mark.parametrize("failure", [None, RuntimeError("request failed"), "invalid_json"])
+@patch('kovaaks.api.api_request_with_retry')
+def test_unsuccessful_first_page_is_retried(mock_req, failure):
+    if failure == "invalid_json":
+        failure = MagicMock()
+        failure.json.side_effect = ValueError("invalid JSON")
+    success = MagicMock()
+    success.json.return_value = {"total": 0, "data": []}
+    mock_req.side_effect = [failure, success]
+
+    assert api.get_next_leaderboard_position_points("testuser", 4000) == {
+        "next_points": 4000, "user_official_points": None,
+    }
+    assert [call.kwargs["params"]["page"] for call in mock_req.call_args_list] == [0, 0]
+
+
+@patch('kovaaks.api.api_request_with_retry')
+def test_page_cache_does_not_outlive_lookup(mock_req):
+    responses = []
+    for points in (4000, 5000):
+        response = MagicMock()
+        response.json.return_value = {"data": [{"webappUsername": "testuser", "points": points}]}
+        responses.append(response)
+    mock_req.side_effect = responses
+
+    assert api.get_next_leaderboard_position_points("testuser", 4000)["next_points"] == 4000
+    assert api.get_next_leaderboard_position_points("testuser", 4000)["next_points"] == 5000
+    assert mock_req.call_count == 2

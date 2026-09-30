@@ -67,7 +67,10 @@ def test_startup_failure_releases_waiters(monkeypatch, tmp_path, stage):
 
     assert api._cache_loaded_event.is_set()
     failure.assert_called_once()
-    assert "Could not load cached data" in api._update_status.call_args.args[0]
+    expected_status = "Rebuilt from memory cache" if stage == "save" else "Could not load cached data"
+    assert expected_status in api._update_status.call_args.args[0]
+    if stage == "save":
+        assert api._scores_cache["_dirty"] is True
     api._update_progress.assert_called_once_with(1, 1)
     # API calls complete with an empty result when the same failure persists.
     if stage in ("load", "rebuild"):
@@ -85,6 +88,55 @@ def test_startup_notification_failure_releases_waiters(monkeypatch, tmp_path):
     assert api._cache_loaded_event.is_set()
     assert api.window.evaluate_js.call_count == 3
     assert len(api.get_data(1000)["rows"]) == 1
+
+
+def test_startup_releases_readiness_before_cache_compression(monkeypatch, tmp_path):
+    api = make_api(monkeypatch, tmp_path)
+    api._cache_loaded_event.clear()
+    api._scores_cache["_dirty"] = True
+    ready_during_save = []
+    monkeypatch.setattr(kovaaks_web, "save_scores_cache", lambda _: (
+        ready_during_save.append(api._cache_loaded_event.is_set())
+    ))
+
+    api._initial_cache_load()
+
+    assert ready_during_save == [True]
+
+
+def test_async_save_failure_is_retried_on_next_data_refresh(monkeypatch, tmp_path):
+    api = make_api(monkeypatch, tmp_path)
+    api._scores_cache.pop("_dirty", None)
+    api._cache_writer = cache.CacheWriter(api._cache_snapshot, save=api._persist_cache_snapshot)
+    save = MagicMock(side_effect=[False, True])
+    monkeypatch.setattr(kovaaks_web, "save_scores_cache", save)
+
+    api._queue_cache_save()
+    # Wait directly on the writer: the asynchronous save callback must mark
+    # dirty without relying on the app's explicit flush helper or shutdown.
+    assert api._cache_writer.flush() is False
+    assert api._scores_cache["_dirty"] is True
+    api.get_data(1000)
+
+    assert api._cache_writer.flush() is True
+    assert save.call_count == 2
+    assert "_dirty" not in api._scores_cache
+
+
+def test_startup_bounds_existing_history_outside_filter(monkeypatch, tmp_path):
+    import datetime
+
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    points = {(now - datetime.timedelta(hours=i)).isoformat(): 10 for i in range(200)}
+    monkeypatch.setattr(kovaaks_web, "load_config", lambda: {"stats_dir": str(tmp_path)})
+    monkeypatch.setattr(kovaaks_web, "load_scores_cache", lambda: {
+        "entry_history": {"filtered-out": dict(points)}, "scenarios": [], "scores": {},
+    })
+
+    api = kovaaks_web.KovaaksAPI()
+
+    assert set(api._scores_cache["entry_history"]["filtered-out"]) == set(sorted(points)[-168:])
+    assert api._scores_cache["_dirty"] is True
 
 
 def test_filter_clears_and_restores_rows(monkeypatch, tmp_path):

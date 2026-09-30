@@ -229,6 +229,16 @@ class TestRebuildDataRows:
                 self._global_points_sum = 0
                 self._cfg = {"username": ""}
                 self._scores_cache = {}
+                import threading
+                self._credentials_lock = threading.RLock()
+                self._data_lock = threading.RLock()
+                self._next_rank_lock = threading.Lock()
+                self._next_rank_requests = {}
+                self._credential_generation = 0
+                self.window = None
+
+            def _queue_cache_save(self):
+                return mock_save_cache(self._scores_cache)
             
             get_next_rank_points = kovaaks_web.KovaaksAPI.get_next_rank_points
 
