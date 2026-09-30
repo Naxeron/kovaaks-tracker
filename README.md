@@ -104,6 +104,7 @@ Tests use temporary caches, settings, logs, and stats directories. Install Node.
 to include the JavaScript rendering tests; those tests are skipped when Node.js
 is unavailable. GitHub Actions runs the suite on Python 3.10 and 3.14 for pushes
 and pull requests.
+CI also validates workflow syntax and expression contexts with actionlint.
 
 ## Credits
 

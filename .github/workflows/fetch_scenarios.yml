@@ -17,11 +17,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      GH_TOKEN: ${{ github.token }}
-      DATA_OUTPUT_DIR: ${{ runner.temp }}/scenario-data
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Set dataset output directory
+        run: echo "DATA_OUTPUT_DIR=$RUNNER_TEMP/scenario-data" >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v7

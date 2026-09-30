@@ -9,6 +9,16 @@ permissions:
   contents: read
 
 jobs:
+  workflows:
+    name: Validate workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check workflow syntax and expressions
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
+
   test:
     runs-on: ubuntu-latest
     strategy:
