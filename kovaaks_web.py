@@ -17,6 +17,7 @@ from copy import deepcopy
 
 from kovaaks.constants import MIN_ENTRIES
 from kovaaks.config_helpers import load_config
+from kovaaks import credentials
 from kovaaks.cache import load_scores_cache, load_scenarios_from_cache, save_scores_cache, SCORES_CACHE
 from kovaaks.scoring import calculate_potential_score
 from kovaaks.stats import get_local_stats as _get_local_stats
@@ -62,6 +63,14 @@ class KovaaksAPI:
         self.window = None
         self._data_lock = threading.RLock()
         self._cfg = load_config()
+        self._credentials_lock = threading.RLock()
+        self._credentials_loaded_event = threading.Event()
+        self._password = self._cfg.pop("password", "")
+        self._legacy_migration_pending = bool(self._password)
+        self._credential_storage = "empty"
+        self._credential_message = "No password saved."
+        self._credential_warning = False
+        self._credential_generation = 0
         self._scores_cache = {}
         self._scenario_info = {}
         self._user_by_lid = {}
@@ -77,12 +86,111 @@ class KovaaksAPI:
         
         self._cache_loaded_event = threading.Event()
         if "pytest" in sys.modules:
+            self._initial_credentials_load()
             self._load_cache_and_populate()
             # Perform initial rebuild in tests to keep behavior synchronous
             played, unplayed = self._rebuild_data()
             self._cache_loaded_event.set()
         else:
+            threading.Thread(target=self._initial_credentials_load, daemon=True).start()
             threading.Thread(target=self._initial_cache_load, daemon=True).start()
+
+    def _initial_credentials_load(self):
+        """Unlock credentials off the GUI thread and always release API callers."""
+        try:
+            with self._credentials_lock:
+                username = self._cfg.get("username", "")
+                if self._legacy_migration_pending:
+                    self._store_password(username, self._password)
+                    if not self._legacy_migration_pending:
+                        from kovaaks.config_helpers import save_config
+                        try:
+                            save_config(self._cfg)
+                        except OSError:
+                            self._credential_warning = True
+                            self._credential_message = (
+                                "Password saved securely, but the old password could not be "
+                                "removed from the settings file. Save settings to retry."
+                            )
+                else:
+                    self._load_password(username)
+        except Exception:
+            # Credential backend exceptions can contain secrets; never log them.
+            self._credential_storage = "session" if self._password else "unavailable"
+            self._credential_message = "Secure storage is unavailable. Please enter your password again."
+            logger.warning("Credential initialization failed; secure storage is unavailable.")
+        finally:
+            self._credentials_loaded_event.set()
+
+    def _load_password(self, username):
+        """Load only this account's password; callers hold the credential lock."""
+        self._password = ""
+        self._credential_storage = "empty"
+        self._credential_message = "No password saved."
+        self._credential_warning = False
+        if not username:
+            return
+        try:
+            self._password = credentials.get_password(username) or ""
+            if self._password:
+                self._credential_storage = "saved"
+                self._credential_message = "Password saved securely on this device."
+        except credentials.CredentialStorageError:
+            self._credential_storage = "unavailable"
+            self._credential_message = "Secure storage is unavailable or locked. Enter your password to continue."
+
+    def _store_password(self, username, password):
+        """Keep login usable for this session if the OS store cannot save it."""
+        self._password = password
+        self._credential_warning = False
+        try:
+            credentials.set_password(username, password)
+        except credentials.CredentialStorageError:
+            self._credential_storage = "session"
+            self._credential_message = (
+                "Secure storage is unavailable or locked. Your password will be used for this session only."
+            )
+            if self._legacy_migration_pending:
+                self._credential_message += (
+                    " The old settings file is unchanged until you save or forget the password."
+                )
+        else:
+            self._legacy_migration_pending = False
+            self._credential_storage = "saved"
+            self._credential_message = "Password saved securely on this device."
+
+    def _get_login_credentials(self):
+        """Return a consistent account/password pair after startup unlocking."""
+        self._credentials_loaded_event.wait()
+        with self._credentials_lock:
+            return self._cfg.get("username", ""), self._password
+
+    def _login_for_generation(self, username, password, generation):
+        """Discard a login that finished after the account was changed or forgotten."""
+        from kovaaks.api import kovaaks_login
+        token = kovaaks_login(username, password)
+        with self._credentials_lock:
+            if generation != self._credential_generation:
+                return None
+            self._jwt_token = token
+            return token
+
+    def _credential_result(self, ok=True, message=None):
+        return {"ok": ok, "credential_storage": self._credential_storage,
+                "has_password": bool(self._password),
+                "credential_warning": self._credential_warning,
+                "message": self._credential_message if message is None else message}
+
+    def _persist_config(self):
+        """Preserve unmigrated legacy credentials until securely saved or forgotten."""
+        from kovaaks.config_helpers import save_config
+        if self._legacy_migration_pending:
+            return False
+        save_config(self._cfg)
+        if self._credential_storage == "saved":
+            self._credential_warning = False
+            self._credential_message = "Password saved securely on this device."
+        return True
 
     def _initial_cache_load(self):
         """Load cached data without leaving callers blocked after a failure."""
@@ -715,7 +823,7 @@ class KovaaksAPI:
         return False
 
     def toggle_hide_scenario(self, scenario_name):
-        from kovaaks.config_helpers import save_config
+        self._credentials_loaded_event.wait()
         lid = next((k for k, v in self._scenario_info.items() if v["name"] == scenario_name), None)
         if not lid:
             return False
@@ -726,15 +834,22 @@ class KovaaksAPI:
             self._hidden_scenarios.add(lid)
             
         self._cfg["hidden_scenarios"] = list(self._hidden_scenarios)
-        save_config(self._cfg)
+        self._persist_config()
         return True
 
     def get_config(self):
         from kovaaks.config_helpers import get_default_stats_dir
+        self._credentials_loaded_event.wait()
+        with self._credentials_lock:
+            credential_state = {
+                "username": self._cfg.get("username", ""),
+                "has_password": bool(self._password),
+                "credential_storage": self._credential_storage,
+                "credential_message": self._credential_message,
+                "credential_warning": self._credential_warning,
+            }
         return {
-            "username": self._cfg.get("username", ""),
-            "password": self._cfg.get("password", ""),
-            "has_password": bool(self._cfg.get("password", "")),
+            **credential_state,
             "stats_dir": self._cfg.get("stats_dir", get_default_stats_dir()),
             "min_entries": self._cfg.get("min_entries", 1000),
             "auto_refresh": self._cfg.get("auto_refresh", False),
@@ -747,15 +862,44 @@ class KovaaksAPI:
         }
 
     def save_settings(self, settings):
-        with self._data_lock:
-            self._save_settings(settings)
+        self._credentials_loaded_event.wait()
+        with self._credentials_lock:
+            settings = dict(settings)
+            username = settings.pop("username", self._cfg.get("username", ""))
+            password = settings.pop("password", "")
+            if not isinstance(username, str) or not isinstance(password, str):
+                return self._credential_result(False, "Enter a valid username and password.")
+            username = username.strip()
+            old_username = self._cfg.get("username", "")
+            changed_account = username != old_username
+            if password and not username:
+                return self._credential_result(False, "Enter a username for this password.")
+            if (changed_account or password) and getattr(self, "_fetch_in_progress", False):
+                return self._credential_result(False, "Wait for the current fetch to finish before changing credentials.")
+            if changed_account and self._legacy_migration_pending:
+                return self._credential_result(False, "Save or forget the current password before changing accounts.")
+            if changed_account or password:
+                self._credential_generation += 1
+                self._jwt_token = None
+                self._cfg["username"] = username
+                if password:
+                    self._store_password(username, password)
+                else:
+                    self._load_password(username)
+            try:
+                with self._data_lock:
+                    saved = self._save_settings(settings)
+            except OSError:
+                return self._credential_result(False, "Could not save settings. Check file permissions and try again.")
+            if not saved:
+                return {**self._credential_result(False), "reason": "legacy_migration_pending"}
+            return self._credential_result()
 
     def _save_settings(self, settings):
         """Invalidate directory-specific stats atomically with their settings."""
-        from kovaaks.config_helpers import save_config
         old_stats_dir = self._cfg.get("stats_dir")
         self._cfg.update(settings)
-        save_config(self._cfg)
+        saved = self._persist_config()
         
         new_stats_dir = self._cfg.get("stats_dir")
         if old_stats_dir != new_stats_dir:
@@ -776,12 +920,49 @@ class KovaaksAPI:
                 save_scores_cache(self._scores_cache)
             self._invalidate_local_stats()
             self._start_file_watcher()
+        return saved
 
     def save_credentials(self, username, password):
-        from kovaaks.config_helpers import save_config
-        self._cfg["username"] = username
-        self._cfg["password"] = password
-        save_config(self._cfg)
+        if not isinstance(username, str) or not username.strip() or not isinstance(password, str) or not password:
+            return self._credential_result(False, "Enter a username and password.")
+        result = self.save_settings({"username": username, "password": password})
+        # A legacy config remains intact on migration failure, but login is
+        # still usable in memory and the UI explains the session-only fallback.
+        if result.get("reason") == "legacy_migration_pending":
+            return self._credential_result()
+        return result
+
+    def clear_credentials(self):
+        """Forget the active account's stored password and invalidate its session."""
+        self._credentials_loaded_event.wait()
+        with self._credentials_lock:
+            if getattr(self, "_fetch_in_progress", False):
+                return self._credential_result(False, "Wait for the current fetch to finish before forgetting credentials.")
+            username = self._cfg.get("username", "")
+            deletion_failed = False
+            try:
+                if username:
+                    credentials.delete_password(username)
+            except credentials.CredentialStorageError:
+                deletion_failed = True
+            self._credential_generation += 1
+            self._password = ""
+            self._jwt_token = None
+            self._legacy_migration_pending = False
+            self._credential_storage = "empty"
+            self._credential_message = "Password forgotten."
+            self._credential_warning = False
+            try:
+                self._persist_config()
+            except OSError:
+                self._credential_warning = True
+                self._credential_message = "Session cleared, but stored credentials may remain. Check file permissions and secure storage, then try forgetting again."
+                return self._credential_result(False)
+            if deletion_failed:
+                self._credential_storage = "unavailable"
+                self._credential_message = "Session cleared, but a saved password may remain in secure storage. Unlock it and try forgetting again."
+                return self._credential_result(False)
+            return self._credential_result()
 
     def get_clipboard(self):
         import sys
@@ -864,9 +1045,19 @@ class KovaaksAPI:
             return False
         self._fetch_in_progress = True
         self._fetch_cancelled = False
-        username = self._cfg.get("username", "")
-        password = self._cfg.get("password", "")
-        threading.Thread(target=run_fetch_all, args=(self, username, password, silent), daemon=True).start()
+        def fetch_with_credentials():
+            try:
+                username, password = self._get_login_credentials()
+            except Exception:
+                self._fetch_in_progress = False
+                try:
+                    self._update_status("Could not prepare login credentials. Please try again.")
+                finally:
+                    self._update_progress(1, 1)
+                return
+            # run_fetch_all owns completion and resets the flag in its finally.
+            run_fetch_all(self, username, password, silent)
+        threading.Thread(target=fetch_with_credentials, daemon=True).start()
         return True
 
     def is_fetch_in_progress(self):
@@ -1212,16 +1403,21 @@ class KovaaksAPI:
         # The client typically uploads within ~1s of writing the stats file.
         time.sleep(1)
 
-        username = self._cfg.get("username", "").strip()
-        password = self._cfg.get("password", "")
+        self._credentials_loaded_event.wait()
+        with self._credentials_lock:
+            username = self._cfg.get("username", "").strip()
+            password = self._password
+            generation = self._credential_generation
+            token = self._jwt_token
 
-        if not getattr(self, "_jwt_token", None):
+        if not token:
             if not username or not password:
                 logger.info("Auto-sync: Local run detected, but cannot fetch API scores (not logged in).")
                 return
             try:
-                from kovaaks.api import kovaaks_login
-                self._jwt_token = kovaaks_login(username, password)
+                token = self._login_for_generation(username, password, generation)
+                if not token:
+                    return
             except Exception as e:
                 logger.debug("Failed silent login during stats poll: %s", e)
                 return
@@ -1235,9 +1431,12 @@ class KovaaksAPI:
         for lid, expected_score in lids_to_update.items():
             max_attempts = 5
             for attempt in range(max_attempts):
+                with self._credentials_lock:
+                    if generation != self._credential_generation:
+                        return
                 try:
                     data = kovaaks_get_friends_scores(
-                        self._jwt_token, lid, session=session,
+                        token, lid, session=session,
                         timeout=10, max_retries=2)
                     
                     user_entry, friend_entries = parse_leaderboard_entries(data, username)
@@ -1259,20 +1458,23 @@ class KovaaksAPI:
                                 pass
                             
                     if target_met or attempt == max_attempts - 1:
-                        if user_entry:
-                            self._user_by_lid[lid] = user_entry
-                            updated = True
-                            sname = self._scenario_info.get(lid, {}).get("name", lid)
-                            logger.info("Auto-updated score for %s", sname)
-                        if friend_entries:
-                            self._friends_by_lid[lid] = friend_entries
-                            
-                        if lid not in self._scores_cache.setdefault("scores", {}):
-                            self._scores_cache["scores"][lid] = {}
-                        if user_entry:
-                            self._scores_cache["scores"][lid]["user"] = user_entry
-                        if friend_entries:
-                            self._scores_cache["scores"][lid]["friends"] = friend_entries
+                        with self._credentials_lock:
+                            if generation != self._credential_generation:
+                                return
+                            if user_entry:
+                                self._user_by_lid[lid] = user_entry
+                                updated = True
+                                sname = self._scenario_info.get(lid, {}).get("name", lid)
+                                logger.info("Auto-updated score for %s", sname)
+                            if friend_entries:
+                                self._friends_by_lid[lid] = friend_entries
+
+                            if lid not in self._scores_cache.setdefault("scores", {}):
+                                self._scores_cache["scores"][lid] = {}
+                            if user_entry:
+                                self._scores_cache["scores"][lid]["user"] = user_entry
+                            if friend_entries:
+                                self._scores_cache["scores"][lid]["friends"] = friend_entries
                             
                         break
                     else:
@@ -1283,11 +1485,15 @@ class KovaaksAPI:
                 except Exception as e:
                     if isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 401:
                         logger.warning("Session expired during auto-update. Attempting re-login.")
-                        self._jwt_token = None
+                        with self._credentials_lock:
+                            if generation != self._credential_generation:
+                                return
+                            self._jwt_token = None
                         if username and password:
                             try:
-                                from kovaaks.api import kovaaks_login
-                                self._jwt_token = kovaaks_login(username, password)
+                                token = self._login_for_generation(username, password, generation)
+                                if not token:
+                                    return
                                 continue
                             except Exception as le:
                                 logger.debug("Re-login failed during auto-update: %s", le)

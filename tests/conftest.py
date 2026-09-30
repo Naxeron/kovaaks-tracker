@@ -238,3 +238,18 @@ def patch_production_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(kovaaks_web, "SCORES_CACHE", fake_cache_path)
     monkeypatch.setattr(config_helpers, "CONFIG_PATH", fake_config_path)
     monkeypatch.setattr(config_helpers, "get_default_stats_dir", lambda: str(tmp_path / "stats"))
+
+
+@pytest.fixture(autouse=True)
+def isolated_credentials(monkeypatch, request):
+    """Never unlock, read, or change the developer's actual OS credential store."""
+    if request.node.path.name == "test_credentials.py":
+        # The low-level storage tests supply their own fake keyring library.
+        return
+    from kovaaks import credentials
+
+    passwords = {}
+    monkeypatch.setattr(credentials, "get_password", lambda username: passwords.get(username))
+    monkeypatch.setattr(credentials, "set_password", lambda username, password: passwords.__setitem__(username, password))
+    monkeypatch.setattr(credentials, "delete_password", lambda username: passwords.pop(username, None))
+    return passwords

@@ -86,6 +86,7 @@
             </div>
         </main>
         
+        <div id="credential-notice" role="status" style="display: none; padding: 10px 20px; color: var(--text-secondary); font-size: 12px;"></div>
         <div id="status-bar" class="status-bar">
             <div id="status-text">Ready</div>
             <div class="progress-container">
@@ -111,7 +112,7 @@
                 <div class="form-group">
                     <label>Password</label>
                     <div class="password-wrapper">
-                        <input type="password" id="login-password">
+                        <input type="password" id="login-password" autocomplete="off" aria-describedby="login-credential-message">
                         <button type="button" class="password-toggle-btn" id="login-show-password" title="Show Password" tabindex="-1">
                             <svg class="eye-show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -124,6 +125,7 @@
                         </button>
                     </div>
                 </div>
+                <p id="login-credential-message" role="status" style="font-size: 12px; color: var(--text-secondary); line-height: 1.5;"></p>
                 <div class="modal-buttons">
                     <button id="btn-login-cancel" class="bottom-btn">Cancel</button>
                     <button id="btn-login-submit" class="action-btn fetch-btn">Login & Fetch</button>
@@ -131,7 +133,7 @@
             </div>
         </div>
         <div id="settings-modal" class="modal" style="display: none;">
-            <div class="modal-content" style="width: 400px;">
+            <div class="modal-content" style="width: 400px; max-height: 90vh; overflow-y: auto;">
                 <h2>Settings</h2>
                 <div class="form-group">
                     <label>KovaaKs Username</label>
@@ -140,7 +142,7 @@
                 <div class="form-group">
                     <label>KovaaKs Password</label>
                     <div class="password-wrapper">
-                        <input type="password" id="settings-password">
+                        <input type="password" id="settings-password" autocomplete="off" aria-describedby="settings-credential-message">
                         <button type="button" class="password-toggle-btn" id="settings-show-password" title="Show Password" tabindex="-1">
                             <svg class="eye-show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -152,6 +154,10 @@
                             </svg>
                         </button>
                     </div>
+                </div>
+                <div class="form-group">
+                    <p id="settings-credential-message" role="status" style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 8px;"></p>
+                    <button type="button" id="btn-forget-password" class="bottom-btn">Forget saved password</button>
                 </div>
                 <div class="form-group">
                     <label>Stats Folder</label>

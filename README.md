@@ -36,6 +36,19 @@ A vibe-coded tracker for KovaaKs. Built for rank farming, sniping friends, and o
    This opens the desktop app, which uses a web-based interface.
 3. **Login**: Enter your KovaaKs credentials.
 
+Passwords are saved through Python `keyring` in Windows Credential Manager,
+macOS Keychain, or a supported Linux Secret Service / KWallet store. On Linux,
+the credential service must be installed and available in your desktop D-Bus
+session; you may be prompted to unlock it. If secure storage is unavailable,
+the app explains that the password is usable only for the current session.
+It never falls back to a plaintext password file.
+
+In Settings, leave the password field blank to keep the current password, enter
+a new one to replace it, or use **Forget saved password** to remove it. Changing
+the username selects that account's credentials. Saved passwords are never
+sent back to the web interface. Any password left in an older config is removed
+only after a verified save to the OS store or an explicit forget operation.
+
 Generated dataset snapshots have been removed from Git history. If you cloned
 before that cleanup, make a fresh clone to benefit from the reduced size. Keep
 your local settings and cached scores when moving to it.
@@ -100,7 +113,8 @@ python -m pip install -r requirements.txt pytest
 python -m pytest -q
 ```
 
-Tests use temporary caches, settings, logs, and stats directories. Install Node.js
+Tests use temporary caches, settings, logs, and stats directories, plus fake
+credential stores that never access your system keychain. Install Node.js
 to include the JavaScript rendering tests; those tests are skipped when Node.js
 is unavailable. GitHub Actions runs the suite on Python 3.10 and 3.14 for pushes
 and pull requests.

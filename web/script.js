@@ -11,18 +11,70 @@ let autoplayActive = false;
 let autoplayCurrentScenario = null;
 let initialFetchTriggered = false;
 let currentAutoHiddenColumns = [];
+let settingsCredentialUsername = '';
+let settingsHasPassword = false;
 
-function showLoginModal(username) {
-    document.getElementById('login-username').value = username || '';
-    document.getElementById('login-password').value = '';
-    const loginToggleBtn = document.getElementById('login-show-password');
-    if (loginToggleBtn) {
-        const eyeShow = loginToggleBtn.querySelector('.eye-show');
-        const eyeHide = loginToggleBtn.querySelector('.eye-hide');
+function clearPasswordInput(prefix) {
+    const input = document.getElementById(`${prefix}-password`);
+    input.value = '';
+    input.type = 'password';
+    const toggle = document.getElementById(`${prefix}-show-password`);
+    if (toggle) {
+        const eyeShow = toggle.querySelector('.eye-show');
+        const eyeHide = toggle.querySelector('.eye-hide');
         if (eyeShow) eyeShow.style.display = 'block';
         if (eyeHide) eyeHide.style.display = 'none';
     }
-    document.getElementById('login-password').type = 'password';
+}
+
+function closeCredentialModal(prefix) {
+    clearPasswordInput(prefix);
+    document.getElementById(`${prefix}-modal`).style.display = 'none';
+}
+
+function setCredentialBusy(prefix, busy) {
+    [`btn-${prefix}-submit`, `btn-${prefix}-cancel`, `${prefix}-username`,
+        `${prefix}-password`, `${prefix}-show-password`].forEach(id => {
+        document.getElementById(id).disabled = busy;
+    });
+    if (prefix === 'settings') {
+        document.getElementById('btn-forget-password').disabled = busy
+            || document.getElementById('settings-username').value.trim() !== settingsCredentialUsername;
+    }
+}
+
+function credentialMessage(storage, message) {
+    if (message) return message;
+    const messages = {
+        saved: 'Password saved securely in your operating system credential store.',
+        session: 'Password is available for this session only. Enter it again after restarting.',
+        unavailable: 'Secure password storage is unavailable. You can still sign in for this session.',
+        empty: 'Passwords are saved in your operating system credential store when available.'
+    };
+    return messages[storage] || messages.empty;
+}
+
+function showCredentialNotice(result) {
+    const notice = document.getElementById('credential-notice');
+    const show = result.credential_warning || ['session', 'unavailable'].includes(result.credential_storage);
+    notice.textContent = show ? credentialMessage(
+        result.credential_storage, result.message || result.credential_message) : '';
+    notice.style.display = show ? 'block' : 'none';
+}
+
+function updatePasswordPlaceholder() {
+    const sameUser = document.getElementById('settings-username').value.trim() === settingsCredentialUsername;
+    document.getElementById('settings-password').placeholder = settingsHasPassword && sameUser
+        ? 'Leave blank to keep current password' : 'Enter password';
+    const forget = document.getElementById('btn-forget-password');
+    forget.disabled = !sameUser || document.getElementById('btn-settings-submit').disabled;
+    forget.title = sameUser ? '' : 'Save account changes before forgetting the password';
+}
+
+function showLoginModal(username, message) {
+    document.getElementById('login-username').value = username || '';
+    clearPasswordInput('login');
+    document.getElementById('login-credential-message').textContent = message || credentialMessage('empty');
     document.getElementById('login-modal').style.display = 'flex';
 }
 
@@ -106,7 +158,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.pywebview && window.pywebview.api) {
             const cfg = await window.pywebview.api.get_config();
             if (!cfg.username || !cfg.has_password) {
-                showLoginModal(cfg.username);
+                showLoginModal(cfg.username, cfg.credential_message);
                 return;
             }
             startFetch();
@@ -128,16 +180,35 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     document.getElementById('btn-login-cancel').addEventListener('click', () => {
-        document.getElementById('login-modal').style.display = 'none';
+        closeCredentialModal('login');
     });
 
     const triggerLoginSubmit = async () => {
-        const user = document.getElementById('login-username').value;
-        const pass = document.getElementById('login-password').value;
-        if (user && pass) {
-            document.getElementById('login-modal').style.display = 'none';
-            await window.pywebview.api.save_credentials(user, pass);
+        if (document.getElementById('btn-login-submit').disabled) return;
+        const user = document.getElementById('login-username').value.trim();
+        let pass = document.getElementById('login-password').value;
+        const message = document.getElementById('login-credential-message');
+        if (!user || !pass) {
+            message.textContent = 'Enter your username and password.';
+            return;
+        }
+        setCredentialBusy('login', true);
+        message.textContent = 'Saving password…';
+        try {
+            const result = await window.pywebview.api.save_credentials(user, pass);
+            if (!result || !result.ok) {
+                message.textContent = result?.message || 'Unable to save credentials. Please try again.';
+                return;
+            }
+            showCredentialNotice(result);
+            closeCredentialModal('login');
             startFetch();
+        } catch {
+            message.textContent = 'Unable to save credentials. Please try again.';
+        } finally {
+            pass = '';
+            clearPasswordInput('login');
+            setCredentialBusy('login', false);
         }
     };
 
@@ -192,15 +263,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.pywebview && window.pywebview.api) {
             const cfg = await window.pywebview.api.get_config();
             document.getElementById('settings-username').value = cfg.username || '';
-            document.getElementById('settings-password').value = cfg.password || '';
-            const settingsToggleBtn = document.getElementById('settings-show-password');
-            if (settingsToggleBtn) {
-                const eyeShow = settingsToggleBtn.querySelector('.eye-show');
-                const eyeHide = settingsToggleBtn.querySelector('.eye-hide');
-                if (eyeShow) eyeShow.style.display = 'block';
-                if (eyeHide) eyeHide.style.display = 'none';
-            }
-            document.getElementById('settings-password').type = 'password';
+            clearPasswordInput('settings');
+            settingsCredentialUsername = (cfg.username || '').trim();
+            settingsHasPassword = !!cfg.has_password;
+            updatePasswordPlaceholder();
+            document.getElementById('settings-credential-message').textContent = credentialMessage(
+                cfg.credential_storage, cfg.credential_message);
             document.getElementById('settings-stats-dir').value = cfg.stats_dir || '';
             document.getElementById('settings-min-entries').value = cfg.min_entries || 1000;
             document.getElementById('settings-auto-refresh').checked = cfg.auto_refresh || false;
@@ -213,13 +281,41 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('btn-settings-cancel').addEventListener('click', () => {
-        document.getElementById('settings-modal').style.display = 'none';
+        closeCredentialModal('settings');
+    });
+
+    document.getElementById('settings-username').addEventListener('input', updatePasswordPlaceholder);
+
+    document.getElementById('btn-forget-password').addEventListener('click', async () => {
+        if (document.getElementById('btn-forget-password').disabled) return;
+        const message = document.getElementById('settings-credential-message');
+        setCredentialBusy('settings', true);
+        message.textContent = 'Removing password…';
+        try {
+            const result = await window.pywebview.api.clear_credentials();
+            message.textContent = result?.message || (result?.ok
+                ? 'Password removed. Enter it again to sign in.'
+                : 'Unable to remove the saved password. Please try again.');
+            if (typeof result?.has_password === 'boolean' || result?.ok) {
+                settingsHasPassword = result.has_password === true;
+                updatePasswordPlaceholder();
+            }
+            if (result) {
+                showCredentialNotice(result);
+            }
+        } catch {
+            message.textContent = 'Unable to remove the saved password. Please try again.';
+        } finally {
+            clearPasswordInput('settings');
+            setCredentialBusy('settings', false);
+        }
     });
 
     document.getElementById('btn-settings-submit').addEventListener('click', async () => {
+        if (document.getElementById('btn-settings-submit').disabled) return;
         if (window.pywebview && window.pywebview.api) {
-            const username = document.getElementById('settings-username').value;
-            const password = document.getElementById('settings-password').value;
+            const username = document.getElementById('settings-username').value.trim();
+            let password = document.getElementById('settings-password').value;
             const stats_dir = document.getElementById('settings-stats-dir').value;
             const min_entries = document.getElementById('settings-min-entries').value;
             const auto_refresh = document.getElementById('settings-auto-refresh').checked;
@@ -228,21 +324,37 @@ document.addEventListener('DOMContentLoaded', () => {
             const always_show_total_points = document.getElementById('settings-always-show-total-points').checked;
             const auto_fit_columns = document.getElementById('settings-auto-fit-columns').checked;
 
-            await window.pywebview.api.save_settings({
-                username: username,
-                password: password,
-                stats_dir: stats_dir,
-                min_entries: min_entries,
-                auto_refresh: auto_refresh,
-                auto_refresh_github_only: auto_refresh_github_only,
-                refresh_interval: refresh_interval,
-                always_show_total_points: always_show_total_points,
-                auto_fit_columns: auto_fit_columns
-            });
-            document.getElementById('settings-modal').style.display = 'none';
-            
-            // Re-fetch data from backend to update view with new settings like min_entries
-            fetchData();
+            const message = document.getElementById('settings-credential-message');
+            setCredentialBusy('settings', true);
+            message.textContent = 'Saving settings…';
+            try {
+                const result = await window.pywebview.api.save_settings({
+                    username: username,
+                    password: password,
+                    stats_dir: stats_dir,
+                    min_entries: min_entries,
+                    auto_refresh: auto_refresh,
+                    auto_refresh_github_only: auto_refresh_github_only,
+                    refresh_interval: refresh_interval,
+                    always_show_total_points: always_show_total_points,
+                    auto_fit_columns: auto_fit_columns
+                });
+                if (!result || !result.ok) {
+                    message.textContent = result?.message || 'Unable to save settings. Please try again.';
+                    return;
+                }
+                showCredentialNotice(result);
+                closeCredentialModal('settings');
+
+                // Re-fetch data from backend to update view with new settings like min_entries
+                fetchData();
+            } catch {
+                message.textContent = 'Unable to save settings. Please try again.';
+            } finally {
+                password = '';
+                clearPasswordInput('settings');
+                setCredentialBusy('settings', false);
+            }
         }
     });
 
@@ -782,6 +894,7 @@ async function fetchData(silent = false) {
         try {
             const cfg = await window.pywebview.api.get_config();
             window.currentConfig = cfg;
+            showCredentialNotice(cfg);
             setupAutoRefresh(cfg);
             visibleColumns = cfg.visible_columns;
             columnWidths = cfg.column_widths || {};
@@ -803,7 +916,7 @@ async function fetchData(silent = false) {
             if (cfg.username && !initialFetchTriggered) {
                 initialFetchTriggered = true;
                 if (!cfg.has_password) {
-                    setTimeout(() => showLoginModal(cfg.username), 500);
+                    setTimeout(() => showLoginModal(cfg.username, cfg.credential_message), 500);
                 } else {
                     startFetch();
                 }

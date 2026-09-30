@@ -56,7 +56,10 @@ def fetch_gzip_json_from_github(filename, app):
             etag = resp.headers.get("ETag") or resp.headers.get("Last-Modified")
             if etag:
                 app._cfg.setdefault("last_etags", {})[filename] = etag
-                save_config(app._cfg)
+                # Keep a legacy plaintext config intact until its credentials
+                # have been migrated successfully to the OS credential store.
+                if not getattr(app, "_legacy_migration_pending", False):
+                    save_config(app._cfg)
             return data
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 404 and attempt < 2:
