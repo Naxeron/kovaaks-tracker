@@ -21,3 +21,8 @@ __pycache__/
 Thumbs.db
 
 data/scores_cache*
+
+# Generated datasets are published as release assets, outside source history.
+data/scenarios*.json.gz
+scenarios.json
+scenarios*.json.gz

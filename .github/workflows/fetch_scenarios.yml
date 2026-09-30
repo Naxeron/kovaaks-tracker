@@ -1,4 +1,4 @@
-name: Fetch Scenarios
+name: Publish Scenario Data
 
 on:
   schedule:
@@ -8,35 +8,51 @@ on:
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+concurrency:
+  group: scenario-data-publisher
+  cancel-in-progress: false
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DATA_OUTPUT_DIR: ${{ runner.temp }}/scenario-data
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.10'
 
       - name: Install dependencies
         run: pip install requests
 
-      - name: Fetch scenarios
-        run: python scripts/fetch_scenarios.py --min-entries 10
+      - name: Restore the previous published data
+        run: >-
+          python scripts/publish_scenarios.py bootstrap
+          --repo "$GITHUB_REPOSITORY"
+          --output-dir "$DATA_OUTPUT_DIR"
+          --seed-ref bea7dcdcd815850d0441753bdfb184cd5cb63f7e
 
-      - name: Commit and push changes
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f data/scenarios.json.gz data/scenarios_history.json.gz
-          if git commit -m "Update scenarios.json.gz"; then
-            git pull --rebase origin main
-            git push
-          else
-            echo "No changes to commit"
-          fi
+      - name: Fetch scenarios
+        id: fetch
+        run: python scripts/fetch_scenarios.py --min-entries 10 --output-dir "$DATA_OUTPUT_DIR"
+
+      - name: Publish rolling release assets
+        run: >-
+          python scripts/publish_scenarios.py publish
+          --repo "$GITHUB_REPOSITORY"
+          --output-dir "$DATA_OUTPUT_DIR"
+
+      - name: Preserve datasets after a publishing failure
+        if: failure() && steps.fetch.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: scenario-data-recovery
+          path: ${{ env.DATA_OUTPUT_DIR }}/*.json.gz
+          retention-days: 7
+          if-no-files-found: error

@@ -7,7 +7,7 @@ import threading
 import concurrent.futures
 import requests
 
-from .constants import GITHUB_RAW_BASE, MIN_ENTRIES
+from .constants import GITHUB_DATA_BASE, MIN_ENTRIES
 from .api import (
     api_request_with_retry,
     fetch_all_scenarios,
@@ -25,18 +25,49 @@ from .data_processing import (
 logger = logging.getLogger("kovaaks")
 
 def fetch_gzip_json_from_github(filename, app):
-    url = f"{GITHUB_RAW_BASE}/{filename}"
-    try:
-        resp = api_request_with_retry("get", url, timeout=30)
-        if resp.status_code == 200:
+    """Read a rolling release asset, briefly retrying asset replacement gaps."""
+    if filename not in ("scenarios.json.gz", "scenarios_history.json.gz"):
+        logger.warning("Unsupported dataset filename: %s", filename)
+        return None
+    url = f"{GITHUB_DATA_BASE}/{filename}"
+    for attempt in range(3):
+        try:
+            resp = api_request_with_retry("get", url, timeout=30)
+            if resp is None:
+                return None
+            if resp.status_code != 200:
+                resp.raise_for_status()
+                return None
+            with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as f:
+                data = json.load(f)
+            if filename == "scenarios.json.gz":
+                if not isinstance(data, list) or any(
+                    not isinstance(item, dict) or not item.get("leaderboardId")
+                    or not isinstance(item.get("counts"), dict)
+                    for item in data
+                ):
+                    raise ValueError("Expected a scenario list")
+            elif not (isinstance(data, dict) and isinstance(data.get("timestamps"), list)
+                      and all(isinstance(stamp, str) for stamp in data["timestamps"])
+                      and isinstance(data.get("history"), dict)
+                      and all(isinstance(counts, list) and len(counts) == len(data["timestamps"])
+                              for counts in data["history"].values())):
+                raise ValueError("Expected timestamps and history in the dataset")
             etag = resp.headers.get("ETag") or resp.headers.get("Last-Modified")
             if etag:
                 app._cfg.setdefault("last_etags", {})[filename] = etag
                 save_config(app._cfg)
-            with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as f:
-                return json.load(f)
-    except Exception as e:
-        logger.warning("Failed to fetch %s from GitHub: %s", filename, e)
+            return data
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404 and attempt < 2:
+                # Replacing a release asset briefly deletes its previous URL.
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            logger.warning("Failed to fetch %s from GitHub: %s", filename, e)
+            break
+        except Exception as e:
+            logger.warning("Failed to fetch %s from GitHub: %s", filename, e)
+            break
     return None
 
 
@@ -123,6 +154,8 @@ def run_fetch_all(app, username, password, silent=False):
         if _is_cancelled():
             app._rebuild_data_and_cancelled(silent=silent)
             return
+        if not all_scenarios:
+            raise RuntimeError("No scenarios available; keeping the previous cache")
         scores_cache["scenarios"] = all_scenarios
         app._cache_corrupted = False
         app._update_progress(0.12, 1.0)
@@ -302,4 +335,3 @@ def run_fetch_all(app, username, password, silent=False):
             cancelled.set()
         app._fetch_cancelled = False
         app._fetch_in_progress = False
-

@@ -35,7 +35,8 @@ SCENARIO_POPULARITY_DROP_OFF_POINTS = [
 # ---------------------------------------------------------------------------
 # URLs
 # ---------------------------------------------------------------------------
-GITHUB_RAW_BASE = "https://raw.githubusercontent.com/Naxeron/kovaaks-tracker/main/data"
+GITHUB_DATA_TAG = "scenario-data"
+GITHUB_DATA_BASE = f"https://github.com/Naxeron/kovaaks-tracker/releases/download/{GITHUB_DATA_TAG}"
 
 # Steam launch URI for KovaaKs (App ID 824270)
 STEAM_LAUNCH_URI = "steam://run/824270/?action=jump-to-scenario;name={}"
