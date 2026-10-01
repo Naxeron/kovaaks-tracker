@@ -75,6 +75,16 @@ normal cache save. The first load of an old cache can still reach its previous
 memory peak; restarting after that save gives the smaller startup footprint.
 Tools reading local history should use `kovaaks.cache.load_scores_cache()` to
 handle both formats. The downloaded release datasets keep their existing format.
+Loaded scenario catalogs are immutable so cache checkpoints can share their
+metadata. Changing scores, history, and local statistics still get independent
+snapshots. Replace a catalog as a whole when installing updated scenario data.
+
+During refreshes, downloads are decoded incrementally and history counts stay
+packed in memory. On Linux, the tracker also returns unused heap pages after
+cache loading, history merging, and background saves where the allocator supports
+it. `Memory [...]` log entries report current and peak RAM for the Python process
+at these stages; renderer processes are separate. These measurements help diagnose
+growth during a long running session as well as temporary download peaks.
 
 If downloads fail, the tracker can fetch scenarios directly from the KovaaKs API.
 If neither source returns scenarios, it keeps the previous cache. Update older

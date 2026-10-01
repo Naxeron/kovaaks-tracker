@@ -242,3 +242,25 @@ def test_previous_snapshot_is_released_before_capturing_pending_changes():
 
     assert len(references) == 2
     assert all(reference() is None for reference in references)
+
+
+@pytest.mark.parametrize("saved", [True, False])
+def test_unused_memory_is_released_after_snapshot_is_dropped(monkeypatch, saved):
+    class Snapshot(dict):
+        pass
+
+    references, released = [], []
+
+    def snapshot():
+        value = Snapshot(scores={"one": 100})
+        references.append(weakref.ref(value))
+        return value
+
+    def release():
+        assert references[0]() is None
+        released.append(True)
+
+    monkeypatch.setattr(cache, "release_unused_memory", release)
+    writer = cache.CacheWriter(snapshot, save=lambda _: saved, synchronous=True)
+    assert writer.request() is saved
+    assert released == [True]

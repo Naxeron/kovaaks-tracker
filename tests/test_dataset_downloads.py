@@ -4,7 +4,7 @@ import gzip
 import json
 import threading
 from types import SimpleNamespace
-from unittest.mock import Mock, call
+from unittest.mock import ANY, Mock, call
 
 import pytest
 import requests
@@ -23,6 +23,7 @@ def response(data=None, status=200, content=None, headers=None):
     result.status_code = status
     result.url = RELEASE_BASE
     result._content = content if content is not None else gzip.compress(json.dumps(data).encode())
+    result._content_consumed = True
     result.headers.update(headers or {})
     return result
 
@@ -45,7 +46,7 @@ def test_downloads_release_asset_and_saves_valid_metadata(downloads, filename, d
     app = SimpleNamespace(_cfg={})
 
     assert fetch_worker.fetch_gzip_json_from_github(filename, app) == data
-    request.assert_called_once_with("get", f"{RELEASE_BASE}/{filename}", timeout=30)
+    request.assert_called_once_with("get", f"{RELEASE_BASE}/{filename}", timeout=30, stream=True, cancel_check=ANY)
     assert app._cfg["last_etags"][filename] == '"dataset-version"'
     save.assert_called_once_with(app._cfg)
     sleep.assert_not_called()
@@ -147,10 +148,10 @@ def test_applied_unchanged_dataset_skips_decoding(downloads, monkeypatch, filena
     downloaded = fetch_worker.fetch_gzip_json_from_github(filename, app)
     apply_download(app, filename, downloaded)
     decode = Mock(side_effect=AssertionError("Unchanged data must not be decompressed"))
-    monkeypatch.setattr(fetch_worker.gzip, "GzipFile", decode)
+    monkeypatch.setattr(fetch_worker, "read_dataset_response", decode)
 
     assert fetch_worker.fetch_gzip_json_from_github(filename, app) is fetch_worker.DATASET_UNCHANGED
-    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30, headers=expected_headers)
+    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30, stream=True, cancel_check=ANY, headers=expected_headers)
     decode.assert_not_called()
     assert save.call_count == 1
     sleep.assert_not_called()
@@ -165,7 +166,7 @@ def test_persisted_validator_without_verified_response_is_not_used(downloads):
     )
 
     assert fetch_worker.fetch_gzip_json_from_github("scenarios.json.gz", app) == SCENARIOS
-    request.assert_called_once_with("get", f"{RELEASE_BASE}/scenarios.json.gz", timeout=30)
+    request.assert_called_once_with("get", f"{RELEASE_BASE}/scenarios.json.gz", timeout=30, stream=True, cancel_check=ANY)
 
 
 @pytest.mark.parametrize("filename,data", [("scenarios.json.gz", SCENARIOS), ("scenarios_history.json.gz", HISTORY)])
@@ -178,7 +179,7 @@ def test_unapplied_response_is_downloaded_again(downloads, filename, data):
     assert fetch_worker.fetch_gzip_json_from_github(filename, app) == data
     assert fetch_worker.fetch_gzip_json_from_github(filename, app) == data
 
-    assert request.call_args_list == [call("get", f"{RELEASE_BASE}/{filename}", timeout=30)] * 2
+    assert request.call_args_list == [call("get", f"{RELEASE_BASE}/{filename}", timeout=30, stream=True, cancel_check=ANY)] * 2
     assert save.call_count == 1
 
 
@@ -199,7 +200,7 @@ def test_replaced_cache_invalidates_conditional_request(downloads, replace):
         app._scores_cache["entry_history"] = {}
 
     assert fetch_worker.fetch_gzip_json_from_github(filename, app) == data
-    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30)
+    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30, stream=True, cancel_check=ANY)
 
 
 def test_scenario_acknowledgment_requires_downloaded_payload_identity(downloads):
@@ -210,7 +211,7 @@ def test_scenario_acknowledgment_requires_downloaded_payload_identity(downloads)
     fetch_worker.mark_dataset_applied(app, "scenarios.json.gz")
 
     assert fetch_worker.fetch_gzip_json_from_github("scenarios.json.gz", app) == SCENARIOS
-    request.assert_called_with("get", f"{RELEASE_BASE}/scenarios.json.gz", timeout=30)
+    request.assert_called_with("get", f"{RELEASE_BASE}/scenarios.json.gz", timeout=30, stream=True, cancel_check=ANY)
 
 
 def test_changed_response_replaces_payload_and_validator_together(downloads):
@@ -225,12 +226,12 @@ def test_changed_response_replaces_payload_and_validator_together(downloads):
 
     downloaded = fetch_worker.fetch_gzip_json_from_github(filename, app)
     assert downloaded == changed
-    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30,
+    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30, stream=True, cancel_check=ANY,
                                headers={"If-None-Match": '"v1"'})
     apply_download(app, filename, downloaded)
 
     assert fetch_worker.fetch_gzip_json_from_github(filename, app) is fetch_worker.DATASET_UNCHANGED
-    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30,
+    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30, stream=True, cancel_check=ANY,
                                headers={"If-None-Match": '"v2"'})
     assert app._scores_cache["scenarios"] == changed
     assert save.call_count == 2
@@ -247,7 +248,7 @@ def test_corrupt_response_does_not_replace_applied_validator(downloads):
 
     assert fetch_worker.fetch_gzip_json_from_github(filename, app) is None
     assert fetch_worker.fetch_gzip_json_from_github(filename, app) is fetch_worker.DATASET_UNCHANGED
-    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30,
+    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30, stream=True, cancel_check=ANY,
                                headers={"If-None-Match": '"v1"'})
     assert app._cfg["last_etags"][filename] == '"v1"'
     assert save.call_count == 1
@@ -259,7 +260,7 @@ def test_304_without_matching_cache_retries_are_bounded(downloads):
     app = SimpleNamespace(_cfg={}, _scores_cache={})
 
     assert fetch_worker.fetch_gzip_json_from_github("scenarios.json.gz", app) is None
-    assert request.call_args_list == [call("get", f"{RELEASE_BASE}/scenarios.json.gz", timeout=30)] * 3
+    assert request.call_args_list == [call("get", f"{RELEASE_BASE}/scenarios.json.gz", timeout=30, stream=True, cancel_check=ANY)] * 3
     sleep.assert_not_called()
     save.assert_not_called()
 
@@ -280,7 +281,7 @@ def test_cache_replaced_during_304_response_retries_unconditionally(downloads):
     request.side_effect = replace_cache
     assert fetch_worker.fetch_gzip_json_from_github(filename, app) == SCENARIOS
     assert request.call_count == 3
-    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30)
+    request.assert_called_with("get", f"{RELEASE_BASE}/{filename}", timeout=30, stream=True, cancel_check=ANY)
 
 
 def test_unchanged_refresh_reuses_scenarios_and_merged_history(downloads, monkeypatch, tmp_path):
@@ -307,7 +308,7 @@ def test_unchanged_refresh_reuses_scenarios_and_merged_history(downloads, monkey
     scenarios = app._scores_cache["scenarios"]
     history = app._scores_cache["entry_history"]
     decode = Mock(side_effect=AssertionError("An unchanged refresh must not decode assets"))
-    monkeypatch.setattr(fetch_worker.gzip, "GzipFile", decode)
+    monkeypatch.setattr(fetch_worker, "read_dataset_response", decode)
     fetch_worker.run_fetch_all(app, "test-user", "")
 
     assert app._scores_cache["scenarios"] is scenarios
@@ -316,9 +317,9 @@ def test_unchanged_refresh_reuses_scenarios_and_merged_history(downloads, monkey
     assert request.call_count == 4
     assert app._rebuild_data_and_finish.call_count == 2
     assert request.call_args_list[-2:] == [
-        call("get", f"{RELEASE_BASE}/scenarios.json.gz", timeout=30,
+        call("get", f"{RELEASE_BASE}/scenarios.json.gz", timeout=30, stream=True, cancel_check=ANY,
              headers={"If-None-Match": '"scenarios-v1"'}),
-        call("get", f"{RELEASE_BASE}/scenarios_history.json.gz", timeout=30,
+        call("get", f"{RELEASE_BASE}/scenarios_history.json.gz", timeout=30, stream=True, cancel_check=ANY,
              headers={"If-None-Match": '"history-v1"'}),
     ]
     api.assert_not_called()

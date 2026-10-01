@@ -162,6 +162,32 @@ def test_downloaded_history_containers_are_released_before_score_requests(monkey
     app._rebuild_data_and_finish.assert_called_once_with(0, silent=False)
 
 
+@pytest.mark.parametrize("cancelled_dataset", ["scenarios.json.gz", "scenarios_history.json.gz"])
+def test_cancelled_download_uses_normal_cancellation_finalizer(monkeypatch, refresh, cancelled_dataset):
+    app, executor = refresh
+    original = {"scenarios": scenarios(1), "scores": {"0": {"user": {"rank": 42}}},
+                "entry_history": {"0": CompactHistory({"2020-01-01": 100})}}
+    app._scores_cache = original
+    from copy import deepcopy
+    before = deepcopy(original)
+
+    def download(filename, app):
+        if filename == cancelled_dataset:
+            raise fetch_worker.RequestCancelled("Fetch cancelled")
+        return scenarios(2)
+
+    monkeypatch.setattr(fetch_worker, "fetch_gzip_json_from_github", download)
+    fetch_worker.run_fetch_all(app, "test_user", "password")
+
+    assert app._scores_cache == before
+    assert executor.submitted == []
+    assert app._fetch_in_progress is False
+    assert app._fetch_cancelled is False
+    app._rebuild_data_and_cancelled.assert_called_once_with(silent=False)
+    app._rebuild_data_and_finish.assert_not_called()
+    assert not any(str(call.args[0]).startswith("Error:") for call in app._update_status.call_args_list)
+
+
 def test_imported_compact_history_preserves_existing_and_first_duplicate_samples(monkeypatch, refresh):
     app, _ = refresh
     stamps = [f"2020-01-01T{hour:02}:00:00" for hour in range(4)]

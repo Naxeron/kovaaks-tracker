@@ -157,9 +157,10 @@ def test_failed_legacy_migration_preserves_file_during_settings_and_metadata_upd
 
     result = api.save_settings({"password": "", "min_entries": 456})
     payload = [{"leaderboardId": "one", "counts": {"entries": 1000}}]
+    compressed = gzip.compress(json.dumps(payload).encode())
     response = SimpleNamespace(
         status_code=200, headers={"ETag": "new-etag"},
-        content=gzip.compress(json.dumps(payload).encode()),
+        iter_content=lambda chunk_size: iter([compressed]), close=lambda: None,
     )
     monkeypatch.setattr(fetch_worker, "api_request_with_retry", lambda *args, **kwargs: response)
 

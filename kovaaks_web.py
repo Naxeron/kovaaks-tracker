@@ -20,6 +20,7 @@ from kovaaks.config_helpers import load_config
 from kovaaks import credentials
 from kovaaks.cache import CacheWriter, load_scores_cache, load_scenarios_from_cache, save_scores_cache, SCORES_CACHE
 from kovaaks.history import CompactHistory
+from kovaaks.memory import log_memory
 from kovaaks.scoring import calculate_potential_score, prune_entry_history
 from kovaaks.stats import get_local_stats as _get_local_stats
 from kovaaks.fetch_worker import run_fetch_all
@@ -209,6 +210,9 @@ class KovaaksAPI:
             # Build the data once and update status/progress
             played, unplayed = self._rebuild_data()
             status = f"Rebuilt from memory cache — {len(played)} played, {len(unplayed)} unplayed"
+            # The browser rebuilds these rows after readiness. Keep only the
+            # computed totals so both complete row sets do not overlap.
+            del played, unplayed
 
             # Save the updated scores cache in case get_local_stats added new local runs.
             # Publish readiness before compression so cached rows are usable immediately.
@@ -269,7 +273,9 @@ class KovaaksAPI:
         with self._data_lock:
             if getattr(self, "_cache_corrupted", False):
                 return None
-            return deepcopy(self._scores_cache)
+            snapshot = deepcopy(self._scores_cache)
+        log_memory("cache snapshot")
+        return snapshot
 
     def _queue_cache_save(self, wait=False):
         """Serialize saves and coalesce pending updates; wait outside data locks."""
@@ -1527,20 +1533,19 @@ class KovaaksAPI:
                         with self._credentials_lock, self._data_lock:
                             if generation != self._credential_generation:
                                 return
+                            cached_entry = self._scores_cache.setdefault("scores", {}).setdefault(lid, {})
                             if user_entry:
-                                self._user_by_lid[lid] = user_entry
-                                updated = True
-                                sname = self._scenario_info.get(lid, {}).get("name", lid)
-                                logger.info("Auto-updated score for %s", sname)
+                                if cached_entry.get("user") != user_entry:
+                                    cached_entry["user"] = user_entry
+                                    updated = True
+                                    sname = self._scenario_info.get(lid, {}).get("name", lid)
+                                    logger.info("Auto-updated score for %s", sname)
+                                self._user_by_lid[lid] = cached_entry["user"]
                             if friend_entries:
-                                self._friends_by_lid[lid] = friend_entries
-
-                            if lid not in self._scores_cache.setdefault("scores", {}):
-                                self._scores_cache["scores"][lid] = {}
-                            if user_entry:
-                                self._scores_cache["scores"][lid]["user"] = user_entry
-                            if friend_entries:
-                                self._scores_cache["scores"][lid]["friends"] = friend_entries
+                                if cached_entry.get("friends") != friend_entries:
+                                    cached_entry["friends"] = friend_entries
+                                    updated = True
+                                self._friends_by_lid[lid] = cached_entry["friends"]
                             
                         break
                     else:

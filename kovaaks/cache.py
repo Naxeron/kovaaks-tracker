@@ -13,6 +13,8 @@ import threading
 import zlib
 
 from .history import CompactHistory
+from .catalog import freeze_catalog
+from .memory import log_memory, release_unused_memory
 
 logger = logging.getLogger("kovaaks")
 
@@ -119,7 +121,11 @@ def load_scores_cache():
             logger.warning("Could not load cache: expected a JSON object")
             return {}
         _decode_history(data)
+        if "scenarios" in data:
+            data["scenarios"] = freeze_catalog(data["scenarios"])
         logger.info("Loaded cache from %s", SCORES_CACHE)
+        release_unused_memory()
+        log_memory("cache loaded")
         return data
     except (ValueError, OSError, EOFError, UnicodeDecodeError, zlib.error) as e:
         logger.warning("Could not load cache: %s", e)
@@ -150,8 +156,9 @@ class CacheWriter:
     """Serialize cache saves and combine requests arriving during a write.
 
     ``snapshot`` is called only when the writer is ready for another save. It
-    must acquire the application's data lock and return detached data, so JSON
-    encoding and compression never access the live cache. Callers must release
+    must acquire the application's data lock and detach mutable data; immutable
+    catalog values may be shared. JSON encoding and compression never access
+    live mutable data. Callers must release
     that lock before requesting a blocking save. ``synchronous`` keeps the same
     behavior without a background thread for deterministic application tests.
     Returning None from ``snapshot`` skips the save, for example when a cache
@@ -231,6 +238,8 @@ class CacheWriter:
                 # Release this potentially large copy before the next snapshot
                 # callback allocates another one, including after failed saves.
                 snapshot = None
+                release_unused_memory()
+                log_memory("cache save finished")
                 with self._condition:
                     self._completed_generation = generation
                     if saved:

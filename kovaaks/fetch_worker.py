@@ -1,7 +1,4 @@
 import time
-import json
-import gzip
-import io
 import logging
 import threading
 import concurrent.futures
@@ -13,13 +10,17 @@ from .constants import GITHUB_DATA_BASE, MIN_ENTRIES
 from .api import (
     API_FETCH_WORKERS,
     RequestCancelled,
+    _retry_wait,
     api_request_with_retry,
     fetch_all_scenarios,
     kovaaks_login,
     kovaaks_get_friends_scores,
 )
 from .cache import save_scores_cache
+from .catalog import freeze_catalog
 from .history import CompactHistory
+from .memory import log_memory, release_unused_memory
+from .dataset_stream import read_dataset_response
 from .config_helpers import save_config
 from .scoring import prune_entry_history
 from .data_processing import (
@@ -91,8 +92,17 @@ def fetch_gzip_json_from_github(filename, app):
         logger.warning("Unsupported dataset filename: %s", filename)
         return None
     url = f"{GITHUB_DATA_BASE}/{filename}"
+
+    def check_cancel():
+        if getattr(app, "_fetch_cancelled", False) is True:
+            raise RequestCancelled("Fetch cancelled")
+
     for attempt in range(3):
+        resp = None
+        reading_body = False
+        retry_delay = None
         try:
+            check_cancel()
             cached = _applied_dataset_entry(app, filename)
             headers = {}
             if cached:
@@ -101,7 +111,8 @@ def fetch_gzip_json_from_github(filename, app):
                 elif cached.last_modified:
                     headers["If-Modified-Since"] = cached.last_modified
             request_options = {"headers": headers} if headers else {}
-            resp = api_request_with_retry("get", url, timeout=30, **request_options)
+            resp = api_request_with_retry(
+                "get", url, timeout=30, stream=True, cancel_check=check_cancel, **request_options)
             if resp is None:
                 return None
             if resp.status_code == 304:
@@ -115,21 +126,12 @@ def fetch_gzip_json_from_github(filename, app):
             if resp.status_code != 200:
                 resp.raise_for_status()
                 return None
-            with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as f:
-                data = json.load(f)
+            reading_body = True
+            data = read_dataset_response(resp, filename, check_cancel=check_cancel)
             if filename == "scenarios.json.gz":
-                if not isinstance(data, list) or any(
-                    not isinstance(item, dict) or not item.get("leaderboardId")
-                    or not isinstance(item.get("counts"), dict)
-                    for item in data
-                ):
-                    raise ValueError("Expected a scenario list")
-            elif not (isinstance(data, dict) and isinstance(data.get("timestamps"), list)
-                      and all(isinstance(stamp, str) for stamp in data["timestamps"])
-                      and isinstance(data.get("history"), dict)
-                      and all(isinstance(counts, list) and len(counts) == len(data["timestamps"])
-                              for counts in data["history"].values())):
-                raise ValueError("Expected timestamps and history in the dataset")
+                data = freeze_catalog(data)
+            reading_body = False
+            check_cancel()
             downloads = getattr(app, "_dataset_download_cache", None)
             if not isinstance(downloads, dict):
                 downloads = app._dataset_download_cache = {}
@@ -150,16 +152,42 @@ def fetch_gzip_json_from_github(filename, app):
                 if metadata_changed and not getattr(app, "_legacy_migration_pending", False):
                     save_config(app._cfg)
             return data
+        except RequestCancelled:
+            raise
         except requests.exceptions.HTTPError as e:
+            # The retry helper may raise before returning its streamed response.
+            if resp is None:
+                resp = e.response
             if e.response is not None and e.response.status_code == 404 and attempt < 2:
                 # Replacing a release asset briefly deletes its previous URL.
                 time.sleep(0.5 * (attempt + 1))
                 continue
             logger.warning("Failed to fetch %s from GitHub: %s", filename, e)
             break
+        except requests.exceptions.RequestException as e:
+            # With stream=True the request helper has already returned before
+            # body I/O. Retry only failures in that new phase; pre-header
+            # failures have already exhausted the helper's own retry budget.
+            if reading_body and resp is not None and resp.status_code == 200 and attempt < 2:
+                retry_delay = 0.5 * (attempt + 1)
+                logger.warning("Interrupted download of %s; retrying in %.1fs: %s",
+                               filename, retry_delay, e)
+            else:
+                logger.warning("Failed to fetch %s from GitHub: %s", filename, e)
+                break
         except Exception as e:
             logger.warning("Failed to fetch %s from GitHub: %s", filename, e)
             break
+        finally:
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    logger.debug("Could not close dataset response", exc_info=True)
+        if retry_delay is not None:
+            # Close the failed stream before waiting, and permit cancellation
+            # throughout the backoff as well as during the next response.
+            _retry_wait(retry_delay, check_cancel)
     return None
 
 
@@ -231,6 +259,7 @@ def run_fetch_all(app, username, password, silent=False):
 
         app._update_progress(0.0, 1.0)
         app._update_status("Fetching all scenarios…")
+        log_memory("fetch started")
         scores_cache = app._scores_cache
         min_entries_threshold = int(app._cfg.get("min_entries", MIN_ENTRIES))
         
@@ -244,6 +273,7 @@ def run_fetch_all(app, username, password, silent=False):
 
         app._update_progress(0.03, 1.0)
         ext_history = fetch_gzip_json_from_github("scenarios_history.json.gz", app)
+        log_memory("fetch datasets decoded")
         app._update_progress(0.05, 1.0)
 
         if ext_history is not DATASET_UNCHANGED and ext_history:
@@ -275,6 +305,8 @@ def run_fetch_all(app, username, password, silent=False):
         # The merged cache now owns the required samples. Do not retain the
         # downloaded matrix or its final row throughout a long score refresh.
         ext_history = h_ts = h_data = counts = additions = None
+        release_unused_memory()
+        log_memory("fetch history merged")
         app._update_progress(0.10, 1.0)
 
         if not all_scenarios:
@@ -311,6 +343,9 @@ def run_fetch_all(app, username, password, silent=False):
             return
         if not all_scenarios:
             raise RuntimeError("No scenarios available; keeping the previous cache")
+        # Downloads are already frozen before validator identity is recorded.
+        # The API fallback also completes all count mutations before publication.
+        all_scenarios = freeze_catalog(all_scenarios)
         with data_lock:
             cache_changed = scores_cache.get("scenarios") != all_scenarios or cache_changed
             scores_cache["scenarios"] = all_scenarios
@@ -485,6 +520,8 @@ def run_fetch_all(app, username, password, silent=False):
 
         finish(False, errors, silent=silent)
 
+    except RequestCancelled:
+        finish(True, silent=silent)
     except Exception as e:
         logger.exception("Error in fetch thread")
         app._update_status(f"Error: {e}")
@@ -498,6 +535,7 @@ def run_fetch_all(app, username, password, silent=False):
         finally:
             app._fetch_cancelled = False
             app._fetch_in_progress = False
+        log_memory("fetch finished")
         if completion is not None:
             method, args, kwargs = completion
             method(*args, **kwargs)
