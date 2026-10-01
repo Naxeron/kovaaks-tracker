@@ -8,6 +8,8 @@ import datetime
 import math
 import logging
 
+from .history import CompactHistory
+
 logger = logging.getLogger("kovaaks")
 
 
@@ -22,14 +24,43 @@ def parse_iso_dt(s):
 def prune_entry_history(history, now_datetime=None, limit=168):
     """Bound every scenario's history, including scenarios outside UI filters.
 
-    Shared hourly timestamps are parsed once per pass. Discard malformed and
-    implausibly future samples before retaining the newest valid samples.
+    Shared hourly timestamps and compact retention plans are checked once per
+    pass. Discard malformed and implausibly future samples before retaining
+    the newest valid samples.
     """
     now = now_datetime or datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     cutoff = now + datetime.timedelta(hours=1)
     parsed = {}
+    retained_axes = {}
     changed = False
     for points in history.values():
+        if isinstance(points, CompactHistory) and points.is_compact:
+            stamps = points.timestamps
+            # Identity avoids hashing the same long tuple for every scenario.
+            # Keep the tuple alive in this pass so its identity cannot be reused.
+            plan = retained_axes.get(id(stamps))
+            if plan is None:
+                valid = []
+                for stamp in stamps:
+                    if stamp not in parsed:
+                        try:
+                            parsed[stamp] = parse_iso_dt(stamp)
+                        except (ValueError, TypeError, AttributeError):
+                            parsed[stamp] = None
+                    if parsed[stamp] is not None and parsed[stamp] <= cutoff:
+                        valid.append(stamp)
+                exceeds_limit = len(valid) > limit
+                if exceeds_limit:
+                    oldest = set(sorted(valid, key=parsed.__getitem__)[:-limit])
+                    valid = [stamp for stamp in valid if stamp not in oldest]
+                retained = (stamps if len(valid) == len(stamps)
+                            else CompactHistory.prepare_timestamps(valid))
+                plan = retained_axes[id(stamps)] = (stamps, retained, exceeds_limit)
+            changed = plan[2] or changed
+            if plan[1] is not stamps:
+                points.retain_timestamps(plan[1])
+                changed = True
+            continue
         for stamp in list(points):
             if stamp not in parsed:
                 try:
@@ -47,8 +78,11 @@ def prune_entry_history(history, now_datetime=None, limit=168):
     return changed
 
 
-def parse_popularity_metrics(hist, now_datetime=None):
+def parse_popularity_metrics(hist, now_datetime=None, *, timeline_cache=None):
     """Calculate popularity trend and actual new entries in the last 24 hours.
+
+    A caller-owned ``timeline_cache`` shares timestamp calculations across one
+    batch of compact histories; scenario-specific counts are always read anew.
 
     Returns:
         tuple: (popularity_trend, actual_new_entries)
@@ -59,21 +93,35 @@ def parse_popularity_metrics(hist, now_datetime=None):
         return popularity_trend, actual_new_entries
 
     try:
-        dates = sorted(hist.keys())
-        oldest = parse_iso_dt(dates[0])
-        newest = parse_iso_dt(dates[-1])
-        seconds_diff = (newest - oldest).total_seconds()
+        stamps = (hist.timestamps if timeline_cache is not None
+                  and isinstance(hist, CompactHistory) and hist.is_compact else None)
+        plan = timeline_cache.get(id(stamps)) if stamps is not None else None
+        if plan is None:
+            dates = sorted(hist.keys())
+            first_stamp, last_stamp = dates[0], dates[-1]
+            oldest = parse_iso_dt(first_stamp)
+            newest = parse_iso_dt(last_stamp)
+            seconds_diff = (newest - oldest).total_seconds()
+            day_stamp = None
+        else:
+            _, first_stamp, last_stamp, seconds_diff, day_stamp = plan
         
         if seconds_diff >= 1800:  # Need at least 30 minutes
-            popularity_trend = (hist[dates[-1]] - hist[dates[0]]) / (seconds_diff / 86400.0)
+            popularity_trend = (hist[last_stamp] - hist[first_stamp]) / (seconds_diff / 86400.0)
             
-            target_24h = newest - datetime.timedelta(days=1)
-            idx_24h = 0
-            for i in range(len(dates) - 1, -1, -1):
-                if parse_iso_dt(dates[i]) <= target_24h:
-                    idx_24h = i
-                    break
-            actual_new_entries = hist[dates[-1]] - hist[dates[idx_24h]]
+            if plan is None:
+                target_24h = newest - datetime.timedelta(days=1)
+                idx_24h = 0
+                for i in range(len(dates) - 1, -1, -1):
+                    if parse_iso_dt(dates[i]) <= target_24h:
+                        idx_24h = i
+                        break
+                day_stamp = dates[idx_24h]
+            actual_new_entries = hist[last_stamp] - hist[day_stamp]
+        if stamps is not None and plan is None:
+            # Retain the source tuple so its identity cannot be reused while
+            # this batch is active, including if a history changes its axis.
+            timeline_cache[id(stamps)] = (stamps, first_stamp, last_stamp, seconds_diff, day_stamp)
     except (ValueError, TypeError, OSError) as e:
         logger.debug("Failed to parse popularity metrics: %s", e)
 

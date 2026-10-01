@@ -65,6 +65,7 @@ const context = vm.createContext({
         querySelector() {return new Element();}
     },
     window: {pywebview: {api}, addEventListener() {}},
+    setTimeout() {},
     console: {error() {throw new Error('Credential errors must not be logged');}}
 });
 vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);

@@ -4,7 +4,6 @@ import ctypes
 import logging
 import subprocess
 from types import SimpleNamespace
-import weakref
 
 import pytest
 
@@ -196,21 +195,17 @@ def test_diagnostics_never_interrupt_fetch(monkeypatch, failure_stage):
     assert memory.log_memory("fetch_checkpoint") == {"rss_bytes": None, "peak_rss_bytes": None}
 
 
-def test_startup_rows_are_released_before_publishing_ready_state():
-    references = []
-
-    class WeakList(list):
-        pass
-
+def test_startup_does_not_allocate_discarded_table_rows():
     class ReadyEvent:
         calls = 0
 
         def set(self):
-            assert references and all(reference() is None for reference in references)
             self.calls += 1
 
     app = SimpleNamespace(
         _load_cache_and_populate=lambda: None,
+        _refresh_local_stats=lambda: None,
+        _scenario_info={"one": {}, "two": {}, "three": {}},
         _scores_cache={}, _cache_loaded_event=ReadyEvent(),
         _update_progress=lambda *args: None, window=None,
     )
@@ -218,14 +213,10 @@ def test_startup_rows_are_released_before_publishing_ready_state():
     app._update_status = statuses.append
 
     def rebuild():
-        played, unplayed = WeakList([{}, {}]), WeakList([{}])
-        references.extend([weakref.ref(played), weakref.ref(unplayed)])
-        app._global_points_sum = 123
-        return played, unplayed
+        pytest.fail("Startup must leave row allocation to the browser request")
 
     app._rebuild_data = rebuild
     KovaaksAPI._initial_cache_load(app)
 
     assert app._cache_loaded_event.calls >= 1
-    assert app._global_points_sum == 123
-    assert statuses == ["Rebuilt from memory cache — 2 played, 1 unplayed"]
+    assert statuses == ["Loaded memory cache — 3 scenarios"]

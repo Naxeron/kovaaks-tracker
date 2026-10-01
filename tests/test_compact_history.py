@@ -168,6 +168,39 @@ def test_packed_constructor_rejects_invalid_storage(timestamps, packed):
         CompactHistory.from_packed(timestamps, packed)
 
 
+def test_prepared_timestamps_reuse_axis_and_still_validate_each_count_buffer():
+    axis = CompactHistory.prepare_timestamps(["one", "two"])
+    first = CompactHistory.from_packed(axis, struct.pack("<2q", 1, 2))
+    second = CompactHistory.from_packed(axis, struct.pack("<2q", 3, 4))
+
+    assert first._axis is second._axis is axis
+    assert first == {"one": 1, "two": 2}
+    assert second == {"one": 3, "two": 4}
+    with pytest.raises(ValueError, match="one int64 per timestamp"):
+        CompactHistory.from_packed(axis, bytes(8))
+    with pytest.raises(ValueError, match="must be bytes"):
+        CompactHistory.from_packed(axis, "0" * 16)
+
+
+@pytest.mark.parametrize("compact", [True, False])
+def test_retain_timestamps_preserves_values_order_and_snapshot(compact):
+    original = {"one": 1, "two": 2, "three": 3 if compact else 3.5}
+    history = CompactHistory(original)
+    snapshot = deepcopy(history)
+
+    history.retain_timestamps(["three", "one"])
+
+    assert list(history.items()) == [("three", original["three"]), ("one", 1)]
+    assert snapshot == original
+    before = dict(history.items())
+    with pytest.raises(KeyError):
+        history.retain_timestamps(["one", "missing"])
+    assert history == before
+    history.retain_timestamps([])
+    assert not history
+    assert snapshot == original
+
+
 def test_bulk_update_preserves_order_and_snapshot_without_repacking_unchanged_values():
     history = CompactHistory({"one": 1, "two": 2})
     snapshot = deepcopy(history)
@@ -212,3 +245,114 @@ def test_existing_history_pruning_and_trend_helpers_accept_compact_mapping():
     assert compact == reference
     assert len(compact) == 168
     assert parse_popularity_metrics(compact) == parse_popularity_metrics(reference)
+
+
+@pytest.mark.parametrize("limit", [0, 1, 3, 168, -1])
+def test_shared_pruning_matches_dicts_with_invalid_future_and_unsorted_dates(limit):
+    now = datetime.datetime(2026, 9, 30, 12)
+    stamps = ["2026-09-30T11:00:00", "invalid", "2026-09-27", "2026-09-30T14:00:00",
+              "2026-09-30T09:00:00", "2026-09-30T10:00:00"]
+    originals = {str(index): dict(zip(stamps, range(index, index + len(stamps))))
+                 for index in range(3)}
+    originals["fallback"] = {**originals["0"], "2026-09-30T08:00:00": 1.5}
+    compact = {lid: CompactHistory(points) for lid, points in originals.items()}
+    snapshots = deepcopy(compact)
+    reference = deepcopy(originals)
+
+    assert prune_entry_history(compact, now, limit) == prune_entry_history(reference, now, limit)
+
+    assert compact == reference
+    assert snapshots == originals
+    assert all(list(compact[lid]) == list(points) for lid, points in reference.items())
+    assert compact["0"].timestamps is compact["1"].timestamps
+
+
+def test_shared_pruning_does_not_scan_each_unchanged_scenario(monkeypatch):
+    now = datetime.datetime(2026, 9, 30, 12)
+    stamps = [(now - datetime.timedelta(hours=hour)).isoformat() for hour in range(168)]
+    history = {str(index): CompactHistory(dict.fromkeys(stamps, index)) for index in range(100)}
+    axes = {id(points.timestamps) for points in history.values()}
+    buffers = {lid: points.packed_counts for lid, points in history.items()}
+    original_iter = CompactHistory.__iter__
+    scanned = []
+
+    def scan(points):
+        scanned.append(points)
+        return original_iter(points)
+
+    monkeypatch.setattr(CompactHistory, "__iter__", scan)
+
+    assert prune_entry_history(history, now) is False
+
+    assert len(scanned) <= len(axes)
+    assert all(points.packed_counts is buffers[lid] for lid, points in history.items())
+
+
+@pytest.mark.parametrize("limit", [0, 1, 3, -1])
+@pytest.mark.parametrize("original", [{}, {"2026-09-30T11:00:00": 1}])
+def test_shared_pruning_retains_existing_limit_and_changed_semantics(limit, original):
+    now = datetime.datetime(2026, 9, 30, 12)
+    compact = {"one": CompactHistory(original)}
+    reference = {"one": dict(original)}
+
+    assert prune_entry_history(compact, now, limit) == prune_entry_history(reference, now, limit)
+    assert compact == reference
+
+
+def test_popularity_batch_reuses_shared_dates_but_reads_each_scenarios_counts(monkeypatch):
+    import kovaaks.scoring as scoring
+
+    stamps = ["2026-09-30T12:00:00", "2026-09-28T12:00:00", "2026-09-29T12:00:00"]
+    first = CompactHistory(dict(zip(stamps, [140, 100, 110])))
+    second = CompactHistory(dict(zip(stamps, [280, 200, 220])))
+    parsed = []
+    parse = scoring.parse_iso_dt
+
+    def parse_once(stamp):
+        parsed.append(stamp)
+        return parse(stamp)
+
+    monkeypatch.setattr(scoring, "parse_iso_dt", parse_once)
+    batch = {}
+
+    assert parse_popularity_metrics(first, timeline_cache=batch) == (20.0, 30)
+    first_parse_count = len(parsed)
+    assert parse_popularity_metrics(second, timeline_cache=batch) == (40.0, 60)
+    assert len(parsed) == first_parse_count
+    assert len(batch) == 1
+    second[stamps[0]] = 300
+    assert parse_popularity_metrics(second, timeline_cache=batch) == (50.0, 80)
+    assert len(parsed) == first_parse_count
+
+
+@pytest.mark.parametrize("points,expected", [
+    ({"2026-09-28": 100, "invalid": 200}, (0.0, 0)),
+    ({"2026-09-28": 100, "2026-09-29-invalid": 150, "2026-09-30": 200}, (50.0, 0)),
+    ({"2026-09-30T12:00:00": 100, "2026-09-30T12:20:00": 200}, (0.0, 0)),
+    ({"2026-09-28": "bad", "2026-09-30": 200}, (0.0, 0)),
+    ({"2026-09-28": 100.5, "2026-09-30": 200.5}, (50.0, 100.0)),
+])
+def test_popularity_batch_preserves_malformed_partial_results_and_fallbacks(points, expected):
+    compact = CompactHistory(points)
+    batch = {}
+
+    assert parse_popularity_metrics(points) == expected
+    assert parse_popularity_metrics(compact, timeline_cache=batch) == expected
+    assert parse_popularity_metrics(compact, timeline_cache=batch) == expected
+
+
+def test_popularity_batch_handles_axis_mutation_and_new_batches():
+    history = CompactHistory({"2026-09-28": 100, "2026-09-29": 110, "2026-09-30": 140})
+    old_axis = history.timestamps
+    batch = {}
+    assert parse_popularity_metrics(history, timeline_cache=batch) == (20.0, 30)
+
+    history.retain_timestamps(["2026-09-29", "2026-09-30"])
+    history["2026-10-01"] = 200
+
+    assert parse_popularity_metrics(history, timeline_cache=batch) == (45.0, 60)
+    assert batch[id(old_axis)][0] is old_axis
+    assert len(batch) == 2
+    next_batch = {}
+    assert parse_popularity_metrics(history, timeline_cache=next_batch) == (45.0, 60)
+    assert len(next_batch) == 1

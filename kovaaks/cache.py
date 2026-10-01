@@ -86,11 +86,12 @@ def _decode_history(cache):
         timelines, series = history.get("timelines"), history.get("series")
         if not isinstance(timelines, list) or not isinstance(series, dict):
             raise ValueError("Invalid packed history envelope")
-        for stamps in timelines:
-            if (not isinstance(stamps, list)
-                    or any(not isinstance(stamp, str) for stamp in stamps)
-                    or len(set(stamps)) != len(stamps)):
+        for index, stamps in enumerate(timelines):
+            if not isinstance(stamps, list):
                 raise ValueError("Invalid history timeline")
+            # Thousands of scenarios share each axis; validate and intern it
+            # once rather than checking every timestamp again for every row.
+            timelines[index] = CompactHistory.prepare_timestamps(stamps)
         for lid, row in series.items():
             if isinstance(row, dict):
                 series[lid] = CompactHistory(row)

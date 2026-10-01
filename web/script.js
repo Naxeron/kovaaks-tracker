@@ -23,6 +23,9 @@ let activeDataFetch = null;
 let dataRefreshQueued = false;
 let dataLoadingShown = false;
 let rankStatsRequest = 0;
+let fetchStatusRequest = 0;
+let activeCredentialConfig = null;
+let credentialConfigVersion = 0;
 
 function scheduleSearchRender() {
     if (searchRenderTimer !== null) clearTimeout(searchRenderTimer);
@@ -90,6 +93,7 @@ function updatePasswordPlaceholder() {
 }
 
 function showLoginModal(username, message) {
+    initialFetchTriggered = true;
     document.getElementById('login-username').value = username || '';
     clearPasswordInput('login');
     document.getElementById('login-credential-message').textContent = message || credentialMessage('empty');
@@ -218,6 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 message.textContent = result?.message || 'Unable to save credentials. Please try again.';
                 return;
             }
+            credentialConfigVersion++;
             showCredentialNotice(result);
             closeCredentialModal('login');
             startFetch();
@@ -319,6 +324,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updatePasswordPlaceholder();
             }
             if (result) {
+                credentialConfigVersion++;
                 showCredentialNotice(result);
             }
         } catch {
@@ -361,6 +367,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     message.textContent = result?.message || 'Unable to save settings. Please try again.';
                     return;
                 }
+                credentialConfigVersion++;
                 showCredentialNotice(result);
                 closeCredentialModal('settings');
 
@@ -853,7 +860,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     window.addEventListener('pywebviewready', function() {
-        fetchData();
+        return fetchData().then(() => {
+            // Webview bridge readiness can wait for document resources. Load
+            // optional fonts only after the first cached table render.
+            const font = document.createElement('link');
+            font.rel = 'stylesheet';
+            font.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap';
+            font.media = 'print';
+            font.onload = () => { font.media = 'all'; };
+            document.head.appendChild(font);
+        });
     });
 });
 
@@ -887,6 +903,9 @@ function setupAutoRefresh(cfg) {
 }
 
 async function startFetch(silent = false) {
+    initialFetchTriggered = true;
+    // A status lookup begun before this fetch must not restore stale buttons.
+    fetchStatusRequest++;
     if (!silent) {
         setLoading(true, "Fetching stats from Steam...");
     }
@@ -902,6 +921,66 @@ async function startFetch(silent = false) {
         if (btnFetch) btnFetch.style.display = 'flex';
         if (btnStopFetch) btnStopFetch.style.display = 'none';
     }
+}
+
+async function refreshFetchStatus() {
+    const request = ++fetchStatusRequest;
+    try {
+        const isFetching = await window.pywebview.api.is_fetch_in_progress();
+        if (request !== fetchStatusRequest) return;
+        const btnFetch = document.getElementById('btn-fetch');
+        const btnStopFetch = document.getElementById('btn-stop-fetch');
+        if (btnFetch) btnFetch.style.display = isFetching ? 'none' : 'flex';
+        if (btnStopFetch) btnStopFetch.style.display = isFetching ? 'flex' : 'none';
+    } catch {
+        // Cached rows remain usable even if the fetch-status bridge fails.
+    }
+}
+
+function applyCredentialConfig(cfg) {
+    const version = ++credentialConfigVersion;
+    // A deferred credential response must not overwrite newer display settings.
+    const credentialKeys = ['username', 'has_password', 'credential_storage',
+        'credential_message', 'credential_warning'];
+    credentialKeys.forEach(key => { window.currentConfig[key] = cfg[key]; });
+    window.currentConfig.credentials_pending = false;
+    showCredentialNotice(cfg);
+    if (!cfg.username || initialFetchTriggered) return;
+
+    const start = () => {
+        if (version !== credentialConfigVersion || initialFetchTriggered) return;
+        initialFetchTriggered = true;
+        if (cfg.has_password) startFetch();
+        else showLoginModal(cfg.username, cfg.credential_message);
+    };
+    if (!cfg.has_password) {
+        setTimeout(start, 500);
+    } else if (window.requestAnimationFrame) {
+        // Run after the next paint so authentication and refresh work cannot
+        // compete with showing the first batch of cached scenarios.
+        window.requestAnimationFrame(() => setTimeout(start, 0));
+    } else {
+        setTimeout(start, 0);
+    }
+}
+
+function finishCredentialStartup(cfg) {
+    if (!cfg.credentials_pending) {
+        applyCredentialConfig(cfg);
+        return;
+    }
+    if (activeCredentialConfig) return;
+    const version = credentialConfigVersion;
+    const username = cfg.username;
+    activeCredentialConfig = window.pywebview.api.get_config().then(loaded => {
+        if (version === credentialConfigVersion && window.currentConfig.username === username) {
+            applyCredentialConfig(loaded);
+        }
+    }).catch(() => {
+        // Do not log credential-backend exceptions, which may contain secrets.
+    }).finally(() => {
+        activeCredentialConfig = null;
+    });
 }
 
 function fetchData(silent = false) {
@@ -942,40 +1021,21 @@ function fetchData(silent = false) {
 async function fetchDataOnce() {
     if (window.pywebview && window.pywebview.api) {
         try {
-            const cfg = await window.pywebview.api.get_config();
+            const cfg = await window.pywebview.api.get_config(false);
             window.currentConfig = cfg;
-            showCredentialNotice(cfg);
             setupAutoRefresh(cfg);
             visibleColumns = cfg.visible_columns;
             columnWidths = cfg.column_widths || {};
-
-            const isFetching = await window.pywebview.api.is_fetch_in_progress();
-            const btnFetch = document.getElementById('btn-fetch');
-            const btnStopFetch = document.getElementById('btn-stop-fetch');
-            if (isFetching) {
-                if (btnFetch) btnFetch.style.display = 'none';
-                if (btnStopFetch) btnStopFetch.style.display = 'flex';
-            } else {
-                if (btnFetch) btnFetch.style.display = 'flex';
-                if (btnStopFetch) btnStopFetch.style.display = 'none';
-            }
 
             const showHidden = document.getElementById('toggle-hidden').classList.contains('active');
             currentData = await window.pywebview.api.get_data(cfg.min_entries || 1000, showHidden);
             resetSortKeyCache();
             window.zombies = new Set(currentData.zombies || []);
-            if (cfg.username && !initialFetchTriggered) {
-                initialFetchTriggered = true;
-                if (!cfg.has_password) {
-                    setTimeout(() => showLoginModal(cfg.username, cfg.credential_message), 500);
-                } else {
-                    startFetch();
-                }
-            }
-            
             renderTable();
             refreshGlobalRankStats();
             setStatus("Ready");
+            refreshFetchStatus();
+            finishCredentialStartup(cfg);
         } catch (err) {
             console.error(err);
             setStatus("Error loading data.");

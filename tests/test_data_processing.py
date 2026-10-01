@@ -46,6 +46,7 @@ def _make_app_stub(scenario_info, user_by_lid, friends_by_lid,
 
     # Bind the real _rebuild_data to our stub
     app._data_lock = threading.RLock()
+    app._refresh_local_stats = kovaaks_web.KovaaksAPI._refresh_local_stats.__get__(app)
     app._build_data_rows = kovaaks_web.KovaaksAPI._build_data_rows.__get__(app)
     orig_rebuild = kovaaks_web.KovaaksAPI._rebuild_data.__get__(app)
     def rebuild_data_wrapper(*args, **kwargs):

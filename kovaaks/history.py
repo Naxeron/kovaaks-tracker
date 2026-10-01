@@ -106,22 +106,45 @@ class CompactHistory(MutableMapping):
         return result
 
     @classmethod
-    def from_packed(cls, timestamps, packed_counts):
-        """Restore immutable count bytes without allocating individual integers."""
+    def prepare_timestamps(cls, timestamps):
+        """Validate one immutable axis for reuse across packed history rows."""
         timestamps = tuple(timestamps)
         if (any(type(stamp) is not str for stamp in timestamps)
                 or len(set(timestamps)) != len(timestamps)):
             raise ValueError("Packed history timestamps must be unique strings")
+        return _axis_for(timestamps)
+
+    @classmethod
+    def from_packed(cls, timestamps, packed_counts):
+        """Restore counts using timestamps or a previously prepared shared axis."""
+        axis = (timestamps if isinstance(timestamps, _TimestampAxis)
+                else cls.prepare_timestamps(timestamps))
         if not isinstance(packed_counts, (bytes, bytearray, memoryview)):
             raise ValueError("Packed history counts must be bytes")
         packed_counts = bytes(packed_counts)
-        if len(packed_counts) != _COUNT.size * len(timestamps):
+        if len(packed_counts) != _COUNT.size * len(axis.timestamps):
             raise ValueError("Packed history counts must contain one int64 per timestamp")
         result = cls.__new__(cls)
-        result._axis = _axis_for(timestamps)
+        result._axis = axis
         result._counts = packed_counts
         result._fallback = None
         return result
+
+    def retain_timestamps(self, timestamps):
+        """Keep selected timestamps in supplied order with one buffer rebuild.
+
+        Values remain unchanged and detached snapshots retain their original
+        axis and immutable count buffer. Missing keys raise before any mutation.
+        """
+        axis = timestamps if isinstance(timestamps, _TimestampAxis) else None
+        timestamps = axis.timestamps if axis is not None else tuple(timestamps)
+        if self._fallback is not None:
+            self._fallback = {stamp: self._fallback[stamp] for stamp in timestamps}
+            return
+        offsets = [self._axis.index[stamp] * _COUNT.size for stamp in timestamps]
+        counts = b"".join(self._counts[offset:offset + _COUNT.size] for offset in offsets)
+        axis = axis if axis is not None else self.prepare_timestamps(timestamps)
+        self._axis, self._counts = axis, counts
 
     @property
     def is_compact(self):

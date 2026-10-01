@@ -15,6 +15,7 @@ const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert');
 const listeners = new Map();
+const windowListeners = new Map();
 const timers = new Map();
 let nextTimer = 1;
 
@@ -59,12 +60,16 @@ const context = vm.createContext({
         createDocumentFragment() { return new Element(); },
         createTextNode(text) { const node = new Element(); node.textContent = text; return node; }
     },
-    window: { addEventListener() {}, currentConfig: { auto_fit_columns: true } },
+    window: {
+        addEventListener(name, fn) { windowListeners.set(name, fn); },
+        currentConfig: { auto_fit_columns: true }
+    },
     setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, {fn, delay}); return id; },
     clearTimeout(id) { timers.delete(id); },
     setInterval() { return nextTimer++; },
     clearInterval() {},
-    ready() { listeners.get('DOMContentLoaded')(); }
+    ready() { listeners.get('DOMContentLoaded')(); },
+    webReady() { return windowListeners.get('pywebviewready')(); }
 });
 vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
 vm.runInContext(`
@@ -101,6 +106,221 @@ def run_browser_test(source):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == "ok"
+
+
+@pytest.mark.parametrize("has_password", [False, True])
+def test_cached_rows_do_not_wait_for_credentials_or_fetch_status(has_password):
+    run_browser_test(f"const hasPassword = {json.dumps(has_password)};" + r"""
+        const credentials = deferred();
+        const fetchStatus = deferred();
+        const frames = [];
+        let configCalls = 0;
+        let credentialCalls = 0;
+        let fetchCalls = 0;
+        let minimum = 1000;
+        window.requestAnimationFrame = callback => frames.push(callback);
+        window.pywebview = {api: {
+            get_config(wait = true) {
+                if (wait) { credentialCalls++; return credentials.promise; }
+                configCalls++;
+                return Promise.resolve({username: 'alice', credentials_pending: true,
+                    min_entries: minimum, auto_fit_columns: true});
+            },
+            is_fetch_in_progress() { return fetchStatus.promise; },
+            async get_data(limit) {
+                assert.strictEqual(limit, minimum);
+                return data('cached scenario');
+            },
+            async get_next_rank_points() { return '+75'; },
+            async get_scenarios_left_to_next_rank() { return {count: '2'}; },
+            async fetch_all_stats() { fetchCalls++; }
+        }};
+        await fetchData();
+        assert.strictEqual(renderedRowsCount, 1);
+        assert.strictEqual(filteredRows[0][0], 'cached scenario');
+        assert.strictEqual(document.getElementById('status-text').textContent, 'Ready');
+        assert.strictEqual(dataLoadingShown, false);
+        assert.strictEqual(fetchCalls, 0);
+        assert.strictEqual(timers.size, 0);
+        minimum = 7000;
+        await fetchData(true);
+        await fetchData(true);
+        assert.strictEqual(configCalls, 3);
+        assert.strictEqual(credentialCalls, 1);
+        credentials.resolve({username: 'alice', has_password: hasPassword,
+            credential_storage: hasPassword ? 'saved' : 'unavailable',
+            credential_warning: true, credential_message: 'Check your credential settings.',
+            min_entries: 1000});
+        await flush();
+        assert.strictEqual(window.currentConfig.min_entries, 7000);
+        assert.strictEqual(window.currentConfig.credentials_pending, false);
+        assert.strictEqual(document.getElementById('credential-notice').textContent,
+            'Check your credential settings.');
+        assert.strictEqual(document.getElementById('credential-notice').style.display, 'block');
+        assert.strictEqual(fetchCalls, 0);
+        if (hasPassword) {
+            assert.strictEqual(frames.length, 1);
+            assert.strictEqual(timers.size, 0);
+            frames[0]();
+            assert.strictEqual(fetchCalls, 0);
+        }
+        for (const [id, timer] of [...timers]) { timers.delete(id); timer.fn(); }
+        await flush();
+        assert.strictEqual(fetchCalls, hasPassword ? 1 : 0);
+        if (!hasPassword) {
+            assert.strictEqual(document.getElementById('login-modal').style.display, 'flex');
+            assert.strictEqual(document.getElementById('login-username').value, 'alice');
+        }
+        fetchStatus.resolve(false);
+        await flush();
+        if (hasPassword) {
+            // The older status response cannot hide Stop after startup refresh began.
+            assert.strictEqual(document.getElementById('btn-stop-fetch').style.display, 'flex');
+        }
+    """)
+
+
+@pytest.mark.parametrize("manual_refresh", [False, True])
+def test_startup_refresh_waits_for_paint_and_only_starts_once(manual_refresh):
+    run_browser_test(f"const manualRefresh = {json.dumps(manual_refresh)};" + r"""
+        const frames = [];
+        let fetchCalls = 0;
+        window.requestAnimationFrame = callback => frames.push(callback);
+        window.pywebview = {api: {
+            async get_config(wait) {
+                assert.strictEqual(wait, false);
+                return {username: 'alice', has_password: true, auto_fit_columns: true};
+            },
+            async is_fetch_in_progress() { return false; },
+            async get_data() { return data('cached scenario'); },
+            async get_next_rank_points() { return '+75'; },
+            async get_scenarios_left_to_next_rank() { return {count: '2'}; },
+            async fetch_all_stats() {
+                assert.strictEqual(renderedRowsCount, 1);
+                fetchCalls++;
+            }
+        }};
+        await fetchData();
+        await fetchData(true);
+        assert.strictEqual(renderedRowsCount, 1);
+        assert.strictEqual(fetchCalls, 0);
+        assert.strictEqual(frames.length, 2);
+        if (manualRefresh) await startFetch();
+        frames.forEach(callback => callback());
+        assert.strictEqual(fetchCalls, manualRefresh ? 1 : 0);
+        for (const [id, timer] of [...timers]) { timers.delete(id); timer.fn(); }
+        await flush();
+        assert.strictEqual(fetchCalls, 1);
+        await fetchData(true);
+        assert.strictEqual(frames.length, 2);
+        assert.strictEqual(fetchCalls, 1);
+    """)
+
+
+def test_explicit_login_is_not_reset_when_delayed_startup_prompt_runs():
+    run_browser_test(r"""
+        window.pywebview = {api: {
+            async get_config() { return {username: 'alice', has_password: false}; },
+            async is_fetch_in_progress() { return false; },
+            async get_data() { return data('cached scenario'); },
+            async get_next_rank_points() { return '+75'; },
+            async get_scenarios_left_to_next_rank() { return {count: '2'}; }
+        }};
+        await fetchData();
+        showLoginModal('bob');
+        document.getElementById('login-password').value = 'typed password';
+        for (const [id, timer] of [...timers]) { timers.delete(id); timer.fn(); }
+        assert.strictEqual(document.getElementById('login-username').value, 'bob');
+        assert.strictEqual(document.getElementById('login-password').value, 'typed password');
+    """)
+
+
+def test_newer_config_supersedes_delayed_credential_response():
+    run_browser_test(r"""
+        const oldCredentials = deferred();
+        let config = {username: 'alice', credentials_pending: true};
+        let fetchCalls = 0;
+        window.pywebview = {api: {
+            get_config(wait = true) {
+                return wait ? oldCredentials.promise : Promise.resolve(config);
+            },
+            async is_fetch_in_progress() { return false; },
+            async get_data() { return data('cached scenario'); },
+            async get_next_rank_points() { return '+75'; },
+            async get_scenarios_left_to_next_rank() { return {count: '2'}; },
+            async fetch_all_stats() { fetchCalls++; }
+        }};
+        await fetchData();
+        config = {username: 'bob', has_password: false,
+            credential_storage: 'unavailable', credential_message: 'Bob needs to sign in.'};
+        await fetchData(true);
+        oldCredentials.resolve({username: 'alice', has_password: true,
+            credential_storage: 'saved'});
+        await flush();
+        for (const [id, timer] of [...timers]) { timers.delete(id); timer.fn(); }
+        await flush();
+        assert.strictEqual(fetchCalls, 0);
+        assert.strictEqual(window.currentConfig.username, 'bob');
+        assert.strictEqual(document.getElementById('credential-notice').textContent,
+            'Bob needs to sign in.');
+        assert.strictEqual(document.getElementById('login-username').value, 'bob');
+    """)
+
+
+def test_failed_credential_lookup_can_retry_without_blocking_rows():
+    run_browser_test(r"""
+        const requests = [];
+        window.pywebview = {api: {
+            get_config(wait = true) {
+                if (!wait) return Promise.resolve({username: 'alice', credentials_pending: true});
+                const next = deferred();
+                requests.push(next);
+                return next.promise;
+            },
+            async is_fetch_in_progress() { throw new Error('Status unavailable'); },
+            async get_data() { return data('cached scenario'); },
+            async get_next_rank_points() { return '+75'; },
+            async get_scenarios_left_to_next_rank() { return {count: '2'}; }
+        }};
+        await fetchData();
+        requests[0].reject(new Error('Credential unavailable'));
+        await flush();
+        assert.strictEqual(activeCredentialConfig, null);
+        await fetchData(true);
+        assert.strictEqual(requests.length, 2);
+        assert.strictEqual(renderedRowsCount, 1);
+        assert.strictEqual(document.getElementById('status-text').textContent, 'Ready');
+        requests[1].resolve({username: 'alice', has_password: false});
+        await flush();
+        assert.strictEqual(activeCredentialConfig, null);
+    """)
+
+
+def test_optional_font_load_starts_after_cached_rows_render():
+    assert "fonts.googleapis.com" not in SCRIPT_PATH.with_name("index.html").read_text()
+    run_browser_test(r"""
+        ready();
+        const rows = deferred();
+        window.pywebview = {api: {
+            async get_config() { return {username: '', auto_fit_columns: true}; },
+            async is_fetch_in_progress() { return false; },
+            get_data() { return rows.promise; },
+            async get_next_rank_points() { return '+75'; },
+            async get_scenarios_left_to_next_rank() { return {count: '2'}; }
+        }};
+        const startup = webReady();
+        await flush();
+        assert.strictEqual(document.head.children.length, 0);
+        rows.resolve(data('cached scenario'));
+        await startup;
+        assert.strictEqual(renderedRowsCount, 1);
+        assert.strictEqual(document.head.children.length, 1);
+        const font = document.head.children[0];
+        assert(font.href.startsWith('https://fonts.googleapis.com/'));
+        assert.strictEqual(font.media, 'print');
+        font.onload();
+        assert.strictEqual(font.media, 'all');
+    """)
 
 
 def test_sort_order_active_column_cache_and_dataset_invalidation():

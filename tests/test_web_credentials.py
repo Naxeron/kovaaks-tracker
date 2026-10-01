@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -63,6 +64,52 @@ def test_startup_restores_saved_password_without_exposing_it(make_api, isolated_
     assert "password" not in api._cfg
     assert "stored-secret" not in json.dumps(public_config)
     assert "stored-secret" not in Path(config_helpers.CONFIG_PATH).read_text()
+
+
+def test_table_config_does_not_wait_for_initial_credential_unlock(make_api, isolated_credentials):
+    isolated_credentials["alice"] = "stored-secret"
+    api = make_api({"min_entries": 321, "column_widths": {"Scenario": 240}})
+    api._credentials_loaded_event.clear()
+    try:
+        # A nonblocking call must not even attempt the wait or credential lock.
+        api._credentials_loaded_event.wait = MagicMock(side_effect=AssertionError("credential wait"))
+        config = api.get_config(False)
+        assert config["credentials_pending"] is True
+        assert config["username"] == "alice"
+        assert config["min_entries"] == 321
+        assert config["column_widths"] == {"Scenario": 240}
+        assert "has_password" not in config
+        assert "password" not in config
+        assert "stored-secret" not in json.dumps(config)
+    finally:
+        api._credentials_loaded_event.set()
+
+    config = api.get_config(False)
+    assert config["credentials_pending"] is False
+    assert config["has_password"] is True
+
+
+def test_table_config_does_not_wait_for_busy_credential_lock(make_api):
+    api = make_api()
+    locked, release = threading.Event(), threading.Event()
+
+    def hold_credentials():
+        with api._credentials_lock:
+            locked.set()
+            assert release.wait(5)
+
+    worker = threading.Thread(target=hold_credentials, daemon=True)
+    worker.start()
+    try:
+        assert locked.wait(5)
+        config = api.get_config(False)
+        assert config["credentials_pending"] is True
+        assert "has_password" not in config
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert api.get_config()["credentials_pending"] is False
 
 
 def test_blank_password_preserves_stored_secret_and_authenticated_session(make_api, isolated_credentials):

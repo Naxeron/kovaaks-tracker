@@ -64,6 +64,33 @@ def test_legacy_load_compacts_and_shares_timestamps_without_rewriting_file():
     assert path.read_bytes() == original
 
 
+def test_packed_load_validates_shared_timestamps_once_per_timeline(monkeypatch):
+    envelope = packed_history()
+    row = envelope["series"]["one"]
+    envelope["series"] = {str(index): list(row) for index in range(100)}
+    envelope["timelines"].append([SECOND, FIRST])
+    envelope["series"]["reversed"] = [1, row[1]]
+    path = write_raw_cache({"entry_history": envelope})
+    original = path.read_bytes()
+    prepared = []
+    prepare_timestamps = CompactHistory.prepare_timestamps
+
+    def prepare(timestamps):
+        prepared.append(tuple(timestamps))
+        return prepare_timestamps(timestamps)
+
+    monkeypatch.setattr(CompactHistory, "prepare_timestamps", prepare)
+
+    loaded = cache.load_scores_cache()
+
+    assert prepared == [(FIRST, SECOND), (SECOND, FIRST)]
+    assert len(loaded["entry_history"]) == 101
+    assert loaded["entry_history"]["0"] == {FIRST: 123, SECOND: 456}
+    assert loaded["entry_history"]["99"] == {FIRST: 123, SECOND: 456}
+    assert loaded["entry_history"]["reversed"] == {SECOND: 123, FIRST: 456}
+    assert path.read_bytes() == original
+
+
 @pytest.mark.parametrize("compact_input", [False, True])
 def test_packed_save_round_trip_reuses_timelines_and_preserves_integer_limits(compact_input):
     history = {

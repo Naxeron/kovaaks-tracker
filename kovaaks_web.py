@@ -21,7 +21,7 @@ from kovaaks import credentials
 from kovaaks.cache import CacheWriter, load_scores_cache, load_scenarios_from_cache, save_scores_cache, SCORES_CACHE
 from kovaaks.history import CompactHistory
 from kovaaks.memory import log_memory
-from kovaaks.scoring import calculate_potential_score, prune_entry_history
+from kovaaks.scoring import calculate_potential_score, parse_popularity_metrics, prune_entry_history
 from kovaaks.stats import get_local_stats as _get_local_stats
 from kovaaks.fetch_worker import run_fetch_all
 from kovaaks.data_processing import safe_int, safe_float
@@ -96,8 +96,8 @@ class KovaaksAPI:
         if "pytest" in sys.modules:
             self._initial_credentials_load()
             self._load_cache_and_populate()
-            # Perform initial rebuild in tests to keep behavior synchronous
-            played, unplayed = self._rebuild_data()
+            # Perform initial local parsing in tests to keep behavior synchronous.
+            self._refresh_local_stats()
             self._cache_loaded_event.set()
         else:
             threading.Thread(target=self._initial_credentials_load, daemon=True).start()
@@ -207,12 +207,10 @@ class KovaaksAPI:
         try:
             self._load_cache_and_populate()
 
-            # Build the data once and update status/progress
-            played, unplayed = self._rebuild_data()
-            status = f"Rebuilt from memory cache — {len(played)} played, {len(unplayed)} unplayed"
-            # The browser rebuilds these rows after readiness. Keep only the
-            # computed totals so both complete row sets do not overlap.
-            del played, unplayed
+            # Parse local runs before starting the watcher. Build rows only when
+            # the browser requests them, with its current filters, after readiness.
+            self._refresh_local_stats()
+            status = f"Loaded memory cache — {len(self._scenario_info)} scenarios"
 
             # Save the updated scores cache in case get_local_stats added new local runs.
             # Publish readiness before compression so cached rows are usable immediately.
@@ -234,12 +232,8 @@ class KovaaksAPI:
             except Exception:
                 logger.debug("Startup progress notification failed", exc_info=True)
 
-            # Notify JS that the data is ready
-            if self.window:
-                try:
-                    self.window.evaluate_js("if(window.fetchData) window.fetchData()")
-                except Exception:
-                    logger.debug("Startup data notification failed", exc_info=True)
+            # The browser's initial get_data call waits on readiness already;
+            # another fetchData notification would queue a duplicate rebuild.
 
     def set_window(self, window):
         self.window = window
@@ -381,6 +375,14 @@ class KovaaksAPI:
         with self._data_lock:
             self._local_stats_dirty = True
 
+    def _refresh_local_stats(self):
+        """Parse pending local runs once, sharing startup work with row builds."""
+        with self._data_lock:
+            # Use cached local stats unless marked dirty.
+            if self._local_stats_dirty:
+                self._local_stats_cache = _get_local_stats(self._get_stats_dir(), self._scores_cache)
+                self._local_stats_dirty = False
+
     def _build_data_rows(self):
         """Compute rows while holding the data lock to avoid duplicate parsing."""
         scenario_info = self._scenario_info
@@ -408,14 +410,11 @@ class KovaaksAPI:
         global_avg_pct = sum(all_pcts) / len(all_pcts) if all_pcts else 50.0
         self._global_avg_pct = global_avg_pct
 
-        stats_dir = self._get_stats_dir()
-        # Use cached local stats unless marked dirty
-        if self._local_stats_dirty:
-            self._local_stats_cache = _get_local_stats(stats_dir, self._scores_cache)
-            self._local_stats_dirty = False
+        self._refresh_local_stats()
         local_stats = self._local_stats_cache
         now = datetime.datetime.now()
         entry_history = self._scores_cache.get("entry_history", {})
+        popularity_timelines = {}
 
         show_hidden = self._filters.get("hidden").get() if "hidden" in self._filters else False
 
@@ -437,26 +436,11 @@ class KovaaksAPI:
             lstats = local_stats.get(sname, {"count": 0, "last_played": None, "trend": 1.0})
 
             hist = entry_history.get(lid, {})
-            popularity_trend = 0.0
-            actual_new_entries = 0
-            if hist and len(hist) >= 2:
-                try:
-                    dates = sorted(hist.keys())
-                    oldest = _parse_iso_dt(dates[0])
-                    newest = _parse_iso_dt(dates[-1])
-                    seconds_diff = (newest - oldest).total_seconds()
-                    if seconds_diff >= 1800:  # Need at least 30 minutes
-                        popularity_trend = (hist[dates[-1]] - hist[dates[0]]) / (seconds_diff / 86400.0)
-                        
-                        target_24h = newest - datetime.timedelta(days=1)
-                        idx_24h = 0
-                        for i in range(len(dates) - 1, -1, -1):
-                            if _parse_iso_dt(dates[i]) <= target_24h:
-                                idx_24h = i
-                                break
-                        actual_new_entries = hist[dates[-1]] - hist[dates[idx_24h]]
-                except ValueError:
-                    pass
+            # The helper requires at least 30 minutes and shares parsed
+            # timelines across this build without caching scenario counts.
+            popularity_trend, actual_new_entries = parse_popularity_metrics(
+                hist, timeline_cache=popularity_timelines,
+            )
 
             competition_multiplier = max(0.2, math.log10(max(1.0, popularity_trend + 1.0)) / 2.0)
 
@@ -899,19 +883,11 @@ class KovaaksAPI:
         self._persist_config()
         return True
 
-    def get_config(self):
+    def get_config(self, wait_for_credentials=True):
+        """Let table settings load even while the operating-system store unlocks."""
         from kovaaks.config_helpers import get_default_stats_dir
-        self._credentials_loaded_event.wait()
-        with self._credentials_lock:
-            credential_state = {
-                "username": self._cfg.get("username", ""),
-                "has_password": bool(self._password),
-                "credential_storage": self._credential_storage,
-                "credential_message": self._credential_message,
-                "credential_warning": self._credential_warning,
-            }
-        return {
-            **credential_state,
+        result = {
+            "username": self._cfg.get("username", ""),
             "stats_dir": self._cfg.get("stats_dir", get_default_stats_dir()),
             "min_entries": self._cfg.get("min_entries", 1000),
             "auto_refresh": self._cfg.get("auto_refresh", False),
@@ -922,6 +898,24 @@ class KovaaksAPI:
             "visible_columns": self._cfg.get("visible_columns", None),
             "column_widths": self._cfg.get("column_widths", {})
         }
+        if wait_for_credentials:
+            self._credentials_loaded_event.wait()
+        elif not self._credentials_loaded_event.is_set():
+            return {**result, "credentials_pending": True}
+        if not self._credentials_lock.acquire(blocking=wait_for_credentials):
+            return {**result, "credentials_pending": True}
+        try:
+            return {
+                **result,
+                "username": self._cfg.get("username", ""),
+                "credentials_pending": False,
+                "has_password": bool(self._password),
+                "credential_storage": self._credential_storage,
+                "credential_message": self._credential_message,
+                "credential_warning": self._credential_warning,
+            }
+        finally:
+            self._credentials_lock.release()
 
     def save_settings(self, settings):
         self._credentials_loaded_event.wait()

@@ -48,7 +48,7 @@ def test_test_paths_are_isolated(tmp_path):
     assert "kovaaks-tests-" in logging_helpers.LOG_FILE
 
 
-@pytest.mark.parametrize("stage", ["load", "rebuild", "save"])
+@pytest.mark.parametrize("stage", ["load", "local_stats", "save"])
 def test_startup_failure_releases_waiters(monkeypatch, tmp_path, stage):
     api = make_api(monkeypatch, tmp_path)
     api._cache_loaded_event.clear()
@@ -57,8 +57,8 @@ def test_startup_failure_releases_waiters(monkeypatch, tmp_path, stage):
     failure = MagicMock(side_effect=ValueError("injected startup failure"))
     if stage == "load":
         monkeypatch.setattr(api, "_load_cache_and_populate", failure)
-    elif stage == "rebuild":
-        monkeypatch.setattr(api, "_rebuild_data", failure)
+    elif stage == "local_stats":
+        monkeypatch.setattr(api, "_refresh_local_stats", failure)
     else:
         api._scores_cache["_dirty"] = True
         monkeypatch.setattr(kovaaks_web, "save_scores_cache", failure)
@@ -67,13 +67,13 @@ def test_startup_failure_releases_waiters(monkeypatch, tmp_path, stage):
 
     assert api._cache_loaded_event.is_set()
     failure.assert_called_once()
-    expected_status = "Rebuilt from memory cache" if stage == "save" else "Could not load cached data"
+    expected_status = "Loaded memory cache" if stage == "save" else "Could not load cached data"
     assert expected_status in api._update_status.call_args.args[0]
     if stage == "save":
         assert api._scores_cache["_dirty"] is True
     api._update_progress.assert_called_once_with(1, 1)
     # API calls complete with an empty result when the same failure persists.
-    if stage in ("load", "rebuild"):
+    if stage in ("load", "local_stats"):
         assert api.get_data(1000)["rows"] == []
 
 
@@ -86,7 +86,7 @@ def test_startup_notification_failure_releases_waiters(monkeypatch, tmp_path):
     api._initial_cache_load()
 
     assert api._cache_loaded_event.is_set()
-    assert api.window.evaluate_js.call_count == 3
+    assert api.window.evaluate_js.call_count == 2
     assert len(api.get_data(1000)["rows"]) == 1
 
 
@@ -102,6 +102,35 @@ def test_startup_releases_readiness_before_cache_compression(monkeypatch, tmp_pa
     api._initial_cache_load()
 
     assert ready_during_save == [True]
+
+
+def test_startup_builds_rows_only_for_the_browser_request(monkeypatch, tmp_path):
+    api = make_api(monkeypatch, tmp_path)
+    api._cache_loaded_event.clear()
+    api.window = MagicMock()
+    rebuild = MagicMock(wraps=api._rebuild_data)
+    monkeypatch.setattr(api, "_rebuild_data", rebuild)
+
+    api._initial_cache_load()
+
+    rebuild.assert_not_called()
+    assert not any("fetchData" in call.args[0] for call in api.window.evaluate_js.call_args_list)
+    result = api.get_data(1000)
+    rebuild.assert_called_once()
+    assert len(result["rows"]) == 1
+    assert result["global_stats"]["points"] == 1490
+
+
+def test_first_table_request_reuses_startup_local_parsing(monkeypatch, tmp_path):
+    write_run(tmp_path)
+    parse = MagicMock(wraps=kovaaks_web._get_local_stats)
+    monkeypatch.setattr(kovaaks_web, "_get_local_stats", parse)
+    api = make_api(monkeypatch, tmp_path)
+
+    result = api.get_data(1000)
+
+    parse.assert_called_once()
+    assert result["rows"][0][result["columns"].index("Local Runs")] == "1"
 
 
 def test_async_save_failure_is_retried_on_next_data_refresh(monkeypatch, tmp_path):
