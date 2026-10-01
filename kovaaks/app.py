@@ -21,7 +21,7 @@ from kovaaks import credentials
 from kovaaks.cache import CacheWriter, load_scores_cache, load_scenarios_from_cache, save_scores_cache, SCORES_CACHE
 from kovaaks.history import CompactHistory
 from kovaaks.memory import log_memory
-from kovaaks.scoring import calculate_potential_score, parse_popularity_metrics, prune_entry_history
+from kovaaks.scoring import calculate_global_points, calculate_potential_score, parse_popularity_metrics, prune_entry_history
 from kovaaks.stats import get_local_stats as _get_local_stats
 from kovaaks.fetch_worker import run_fetch_all
 from kovaaks.data_processing import safe_int, safe_float
@@ -455,7 +455,14 @@ class KovaaksAPI:
         rows = []
         played = 0
         unplayed = 0
-        self._global_points_sum = 0
+        # Global rank covers every cached played scenario, including hidden
+        # rows and those below the table's minimum entry count. Keep practice
+        # candidates filtered, but never subtract a filtered subtotal from an
+        # official global leaderboard target. Accept legacy top-level scores.
+        self._global_points_sum = calculate_global_points(
+            self._scores_cache.get("scenarios", []),
+            self._scores_cache.get("scores") or self._scores_cache,
+        )
         self._global_potential_points_sum = 0
         self._global_projected_gain_sum = 0
         expected_gains = []
@@ -527,7 +534,6 @@ class KovaaksAPI:
                 expected_rank = max(1, int(e_val * (1.0 - expected_pct / 100.0)))
                 if has_user:
                     r_val = int(user_by_lid[lid]["rank"])
-                    self._global_points_sum += (e_val - r_val)
                     self._global_potential_points_sum += (r_val - 1)
                     gain = r_val - expected_rank
                     if gain > 0:

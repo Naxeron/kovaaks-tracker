@@ -6,6 +6,9 @@ import datetime
 import math
 import os
 import sys
+from types import MappingProxyType
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -13,7 +16,72 @@ from kovaaks.scoring import (
     parse_iso_dt,
     parse_popularity_metrics,
     calculate_potential_score,
+    calculate_global_points,
 )
+
+
+class TestCalculateGlobalPoints:
+    def test_all_cached_played_leaderboards_count_once(self):
+        from kovaaks.catalog import freeze_catalog
+
+        scenarios = freeze_catalog([
+            {"leaderboardId": 1, "counts": {"entries": 1000}},
+            {"leaderboardId": "1", "counts": {"entries": 1000}},
+            {"leaderboardId": "small", "counts": {"entries": "20"}},
+            {"leaderboardId": "hidden", "counts": {"entries": 500}},
+            {"leaderboardId": "last", "counts": {"entries": 10}},
+            {"leaderboardId": "unplayed", "counts": {"entries": 5000}},
+            {"leaderboardId": "friends", "counts": {"entries": 5000}},
+        ])
+        scores = MappingProxyType({
+            "1": {"user": {"rank": 100}},
+            "small": {"user": {"rank": "2"}},
+            "hidden": {"user": {"rank": 50}},
+            "last": {"user": {"rank": 10}},
+            "friends": {"friends": [{"rank": 1}]},
+            "missing-from-catalog": {"user": {"rank": 1}},
+        })
+
+        assert calculate_global_points(scenarios, scores) == 900 + 18 + 450
+
+    @pytest.mark.parametrize("entries,rank", [
+        (100, 0), (100, -1), (100, 101), (0, 1), (-5, 1),
+        (100, None), (None, 1), (100, "bad"), ("bad", 1),
+        (100, float("inf")), (float("inf"), 1),
+        (100, float("nan")), (float("nan"), 1),
+        (100, "Infinity"), ("NaN", 1),
+        (100, True), (True, 1), (100, 1.5), (100.5, 1),
+        (100, []), ({}, 1), (10 ** 1000, 1), (100, 10 ** 1000),
+    ])
+    def test_invalid_counts_and_ranks_do_not_add_or_subtract_points(self, entries, rank):
+        scenarios = [
+            {"leaderboardId": "valid", "counts": {"entries": 20}},
+            {"leaderboardId": "bad", "counts": {"entries": entries}},
+        ]
+        scores = {"valid": {"user": {"rank": 1}}, "bad": {"user": {"rank": rank}}}
+
+        assert calculate_global_points(scenarios, scores) == 19
+
+    @pytest.mark.parametrize("scenarios,scores", [
+        (None, {}), ({}, {}), ("catalog", {}), ([], None), ([], []),
+        ([None, [], {}, {"leaderboardId": None}, {"leaderboardId": []}], {}),
+        ([{"leaderboardId": "1", "counts": None}], {"1": {"user": {"rank": 1}}}),
+        ([{"leaderboardId": "1", "counts": {"entries": 100}}], {"1": None}),
+        ([{"leaderboardId": "1", "counts": {"entries": 100}}], {"1": {"user": None}}),
+        ([{"leaderboardId": " ", "counts": {"entries": 100}}], {" ": {"user": {"rank": 1}}}),
+    ])
+    def test_malformed_or_missing_data_is_ignored(self, scenarios, scores):
+        assert calculate_global_points(scenarios, scores) == 0
+
+    def test_read_only_mappings_and_integral_numbers_are_supported(self):
+        scenarios = (MappingProxyType({
+            "leaderboardId": "1", "counts": MappingProxyType({"entries": 100.0}),
+        }),)
+        scores = MappingProxyType({
+            "1": MappingProxyType({"user": MappingProxyType({"rank": "2.0"})}),
+        })
+
+        assert calculate_global_points(scenarios, scores) == 98
 
 
 class TestParseIsoDt:

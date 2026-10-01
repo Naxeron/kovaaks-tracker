@@ -175,3 +175,89 @@ def test_fast_background_lookup_returns_fresh_value_and_notifies_guarded_hook(ap
     api.window.evaluate_js.assert_called_once_with(
         'if(window.onRankStatsUpdated) { void window.onRankStatsUpdated("player"); }'
     )
+
+
+@pytest.mark.parametrize("minimum,show_hidden,names", [
+    (100, False, {"Visible", "Small"}),
+    (1000, False, {"Visible"}),
+    (100, True, {"Hidden"}),
+    (5000, False, set()),
+])
+def test_global_points_and_live_gap_ignore_table_filters(api, monkeypatch, minimum, show_hidden, names):
+    api._scores_cache.update({
+        "scenarios": [
+            {"leaderboardId": lid, "scenarioName": name, "counts": {"entries": entries}}
+            for lid, name, entries in [
+                ("visible", "Visible", 4000), ("hidden", "Hidden", 3000),
+                ("small", "Small", 200), ("tiny", "Tiny", 50),
+                ("reset", "Reset", 9),
+            ]
+        ],
+        "scores": {
+            lid: {"user": {"rank": rank, "score": 100, "date": ""}}
+            for lid, rank in [("visible", 100), ("hidden", 500), ("small", 50),
+                              ("tiny", 10), ("reset", 612)]
+        },
+        "next_rank": {
+            "username": "player", "points": 7300,
+            "user_official_points": 6600, "timestamp": time.time(),
+        },
+    })
+    api._hidden_scenarios = {"hidden"}
+    lookup = Mock(side_effect=AssertionError("Fresh rank cache should avoid network access"))
+    monkeypatch.setattr(kovaaks.api, "get_next_leaderboard_position_points", lookup)
+
+    data = api.get_data(minimum, show_hidden)
+
+    assert {row[0] for row in data["rows"]} == names
+    # Include 3900 + 2500 + 150 + 40 points; a reset leaderboard cannot
+    # subtract 603 points from other scenarios. Even an empty table retains
+    # the global total used by the rank APIs.
+    assert api._global_points_sum == 6590
+    if names:
+        assert data["global_stats"]["points"] == 6590
+    assert api.get_next_rank_points() == "+700"
+    assert api.get_scenarios_left_to_next_rank()["live_gap"] == "+710"
+    lookup.assert_not_called()
+
+    # Later scenario updates move the live estimate without rewriting the
+    # official snapshot, even if that scenario is excluded from this view.
+    api._scores_cache["scores"]["tiny"]["user"]["rank"] = 5
+    api.get_data(minimum, show_hidden)
+    assert api._global_points_sum == 6595
+    assert api.get_next_rank_points() == "+700"
+    assert api.get_scenarios_left_to_next_rank()["live_gap"] == "+705"
+
+
+def test_global_total_does_not_add_hidden_or_small_practice_candidates(api):
+    api._scores_cache.update({
+        "scenarios": [
+            {"leaderboardId": lid, "scenarioName": lid, "counts": {"entries": entries}}
+            for lid, entries in [("played", 1000), ("practice", 1000),
+                                 ("hidden", 5000), ("small", 100)]
+        ],
+        "scores": {"played": {"user": {"rank": 500, "score": 100}}},
+        "next_rank": {"username": "player", "points": 1500},
+    })
+    api._hidden_scenarios = {"hidden"}
+
+    api.get_data(1000)
+
+    assert api._global_points_sum == 500
+    assert api._scenarios_expected_gains == [500]
+    assert api.get_scenarios_left_to_next_rank()["count"] == ">1"
+
+
+def test_legacy_top_level_scores_contribute_to_global_total(api):
+    api._scores_cache = {
+        "scenarios": [
+            {"leaderboardId": "legacy", "scenarioName": "Legacy", "counts": {"entries": 100}},
+        ],
+        "legacy": {"user": {"rank": 20, "score": 100}},
+        "next_rank": {"username": "player", "points": 200},
+    }
+
+    api.get_data(1000)
+
+    assert api._global_points_sum == 80
+    assert api.get_scenarios_left_to_next_rank()["live_gap"] == "+120"

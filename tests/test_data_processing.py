@@ -26,6 +26,14 @@ def _make_app_stub(scenario_info, user_by_lid, friends_by_lid,
     app._user_by_lid = user_by_lid
     app._friends_by_lid = friends_by_lid
     app._scores_cache = scores_cache or {"entry_history": {}}
+    app._scores_cache.setdefault("scenarios", [
+        {"leaderboardId": lid, "scenarioName": info["name"],
+         "counts": {"entries": info["entries"]}}
+        for lid, info in scenario_info.items()
+    ])
+    app._scores_cache.setdefault("scores", {
+        lid: {"user": user} for lid, user in user_by_lid.items()
+    })
     app._cfg = cfg or {"stats_dir": "/nonexistent", "min_entries": "1000",
                        "always_show_total_points": True}
     app._global_points_sum = 0

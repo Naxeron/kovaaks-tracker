@@ -176,7 +176,8 @@ def test_filter_clears_and_restores_rows(monkeypatch, tmp_path):
     assert api._scenario_info == {}
     assert api._user_by_lid == {}
     assert api._friends_by_lid == {}
-    assert api._global_points_sum == 0
+    # The table clears, but global rank still includes the cached score.
+    assert api._global_points_sum == 1490
 
     assert len(api.get_data(1000)["rows"]) == 1
     api._scores_cache["scenarios"] = []

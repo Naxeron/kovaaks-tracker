@@ -7,10 +7,57 @@ Encapsulates popularity trends and the multi-factor priority algorithm.
 import datetime
 import math
 import logging
+from collections.abc import Mapping, Sequence
 
+from .data_processing import safe_float, safe_int
 from .history import CompactHistory
 
 logger = logging.getLogger("kovaaks")
+
+
+def calculate_global_points(scenarios, scores):
+    """Sum unique cached leaderboard contributions before any display filters.
+
+    Official global points are entries minus the user's rank on each scenario.
+    Use the full catalog's accurate entry counts and cached API ranks, including
+    hidden and low-population scenarios. Missing scores and inconsistent ranks
+    cannot establish a contribution and are ignored.
+    """
+    if (not isinstance(scenarios, Sequence) or isinstance(scenarios, (str, bytes))
+            or not isinstance(scores, Mapping)):
+        return 0
+
+    def count(value):
+        try:
+            number = safe_float(value, None)
+        except OverflowError:
+            return None
+        if (isinstance(value, bool) or number is None or not math.isfinite(number)
+                or not number.is_integer()):
+            return None
+        return safe_int(number, None)
+
+    total = 0
+    seen = set()
+    for scenario in scenarios:
+        if not isinstance(scenario, Mapping):
+            continue
+        raw_lid = scenario.get("leaderboardId")
+        if not isinstance(raw_lid, (str, int)) or isinstance(raw_lid, bool):
+            continue
+        lid = str(raw_lid)
+        if not lid.strip() or lid in seen:
+            continue
+        counts = scenario.get("counts")
+        cached = scores.get(lid)
+        user = cached.get("user") if isinstance(cached, Mapping) else None
+        if not isinstance(counts, Mapping) or not isinstance(user, Mapping):
+            continue
+        entries, rank = count(counts.get("entries")), count(user.get("rank"))
+        if entries is not None and rank is not None and 1 <= rank <= entries:
+            total += entries - rank
+            seen.add(lid)
+    return total
 
 
 def parse_iso_dt(s):
