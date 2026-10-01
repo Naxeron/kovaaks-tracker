@@ -8,7 +8,7 @@ import subprocess
 import pytest
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "web" / "script.js"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "kovaaks" / "web" / "script.js"
 
 # No browser or third-party JavaScript packages are needed. The DOM rejects
 # innerHTML writes, so the regression catches unsafe interpolation directly.

@@ -7,7 +7,7 @@ import requests
 
 from kovaaks import api as http_api
 from kovaaks import fetch_worker
-import kovaaks_web
+from kovaaks import app as kovaaks_web
 
 
 def make_api(monkeypatch, tmp_path):

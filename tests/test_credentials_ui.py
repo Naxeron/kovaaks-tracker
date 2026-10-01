@@ -8,7 +8,7 @@ import subprocess
 import pytest
 
 
-WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+WEB_DIR = Path(__file__).resolve().parents[1] / "kovaaks" / "web"
 HARNESS = r"""
 const fs = require('fs');
 const vm = require('vm');

@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 import kovaaks.api as remote_api
-import kovaaks_web
+from kovaaks import app as kovaaks_web
 
 
 @pytest.fixture

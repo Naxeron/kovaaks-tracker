@@ -229,7 +229,7 @@ def patch_production_paths(tmp_path, monkeypatch):
     
     import kovaaks.cache as cache
     import kovaaks.config_helpers as config_helpers
-    import kovaaks_web
+    from kovaaks import app as kovaaks_web
     
     fake_cache_path = os.path.join(str(tmp_path), "scores_cache.json.gz")
     fake_config_path = os.path.join(str(tmp_path), "config.json")

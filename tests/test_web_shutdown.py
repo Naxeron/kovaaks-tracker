@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from kovaaks import fetch_worker
-import kovaaks_web
+from kovaaks import app as kovaaks_web
 
 
 class ClosingEvent:
@@ -247,7 +247,7 @@ def test_process_exits_with_blocked_fetch_and_persists_completed_scores(tmp_path
         credentials.delete_password = lambda *args: None
         sys.modules["webview"] = SimpleNamespace()
 
-        import kovaaks_web
+        from kovaaks import app as kovaaks_web
         from kovaaks import fetch_worker
 
         scenarios = [
@@ -347,7 +347,7 @@ def test_process_exits_when_callback_or_watcher_never_returns(tmp_path, blocked_
         credentials.delete_password = lambda *args: None
         sys.modules["webview"] = SimpleNamespace()
 
-        import kovaaks_web
+        from kovaaks import app as kovaaks_web
         from kovaaks import fetch_worker
 
         # Use the application's normal synchronous test initialization so the

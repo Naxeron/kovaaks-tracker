@@ -8,6 +8,11 @@ config.json
 __pycache__/
 *.pyc
 *.pyo
+.venv/
+.pytest_cache/
+
+# Application ZIPs and temporary build output
+dist/
 
 # Editor
 .vscode/
@@ -20,9 +25,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-data/scores_cache*
+# Local settings, caches, logs, and interrupted atomic saves
+/data/
 
 # Generated datasets are published as release assets, outside source history.
-data/scenarios*.json.gz
 scenarios.json
 scenarios*.json.gz

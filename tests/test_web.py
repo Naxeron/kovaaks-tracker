@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kovaaks_web import KovaaksAPI
+from kovaaks.app import KovaaksAPI
 
 
 class SyncThread:
@@ -19,8 +19,8 @@ class SyncThread:
         self.target(*self.args, **self.kwargs)
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 def test_play_scenario(mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -38,8 +38,8 @@ def test_play_scenario(mock_load_cache, mock_load_config):
         )
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 def test_play_scenario_handles_exception(mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -54,9 +54,9 @@ def test_play_scenario_handles_exception(mock_load_cache, mock_load_config):
         assert res is True
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 def test_update_status(mock_polling, mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -69,9 +69,9 @@ def test_update_status(mock_polling, mock_load_cache, mock_load_config):
     mock_window.evaluate_js.assert_called_with('if(window.setStatus) window.setStatus("Hello status")')
 
 
-@patch("kovaaks_web.save_scores_cache")
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.save_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 @patch("os.path.exists")
 @patch("os.listdir")
 @patch("threading.Thread")
@@ -96,9 +96,9 @@ def test_start_stats_polling(mock_thread, mock_listdir, mock_exists, mock_load_c
     mock_save.assert_not_called()
 
 
-@patch("kovaaks_web.save_scores_cache")
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.save_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 @patch("os.path.exists")
 @patch("os.listdir")
 @patch("threading.Thread")
@@ -145,9 +145,9 @@ def test_start_stats_polling_with_new_files(
 
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 @patch("time.sleep")
 def test_handle_new_stats_files(mock_sleep, mock_polling, mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
@@ -162,14 +162,14 @@ def test_handle_new_stats_files(mock_sleep, mock_polling, mock_load_cache, mock_
     mock_window.evaluate_js.assert_any_call('if (window.onLocalScoreDetected) window.onLocalScoreDetected("1w6ts Reload")')
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 @patch("time.sleep")
 @patch("kovaaks.api.kovaaks_login")
 @patch("kovaaks.api.kovaaks_get_friends_scores")
 @patch("kovaaks.data_processing.parse_leaderboard_entries")
-@patch("kovaaks_web.save_scores_cache")
+@patch("kovaaks.app.save_scores_cache")
 def test_handle_new_stats_files_with_fetch(
     mock_save_cache, mock_parse, mock_get_scores, mock_login, mock_sleep,
     mock_polling, mock_load_cache, mock_load_config
@@ -198,6 +198,7 @@ def test_handle_new_stats_files_with_fetch(
 def test_style_css_selection():
     css_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "kovaaks",
         "web",
         "style.css"
     )
@@ -229,6 +230,7 @@ def test_web_ui_optimizations():
     # Verify style.css contains hardware acceleration properties on .table-container
     css_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "kovaaks",
         "web",
         "style.css"
     )
@@ -247,6 +249,7 @@ def test_web_ui_optimizations():
     # Verify script.js contains throttled scroll listeners and smooth scroll interpolators
     js_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "kovaaks",
         "web",
         "script.js"
     )
@@ -261,10 +264,11 @@ def test_web_ui_optimizations():
     assert "isAnimatingScroll" in content_js
     assert "animateScroll" in content_js
 
-    # Verify kovaaks_web.py sets the environment variable and checks sys.argv for --gui
+    # Verify the application sets the environment variable and checks sys.argv for --gui
     py_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "kovaaks_web.py"
+        "kovaaks",
+        "app.py"
     )
     assert os.path.exists(py_path)
     with open(py_path, "r", encoding="utf-8") as f:
@@ -275,9 +279,9 @@ def test_web_ui_optimizations():
     assert "sys.argv" in content_py
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 @patch("time.sleep")
 def test_autoplay_notification_fires_before_table_refresh(
     mock_sleep, mock_polling, mock_load_cache, mock_load_config
@@ -309,10 +313,10 @@ def test_autoplay_notification_fires_before_table_refresh(
     )
 
 
-@patch("kovaaks_web.save_scores_cache")
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.save_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 @patch("time.sleep")
 @patch("kovaaks.api.kovaaks_login")
 @patch("kovaaks.api.kovaaks_get_friends_scores")
@@ -351,8 +355,8 @@ def test_handle_new_stats_files_retries_when_user_entry_none(
         mock_save_cache.assert_called_once()
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 def test_play_scenario_zombie_notifies_frontend(mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {
@@ -374,8 +378,8 @@ def test_play_scenario_zombie_notifies_frontend(mock_load_cache, mock_load_confi
     assert any("onZombieDetected" in call and "Pasu Voltaic Easy" in call for call in calls)
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 def test_play_scenario_bg_zombie_notifies_frontend(mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {
@@ -393,7 +397,7 @@ def test_play_scenario_bg_zombie_notifies_frontend(mock_load_cache, mock_load_co
     with patch("kovaaks.api.is_scenario_zombie", return_value=True), \
          patch("threading.Thread", SyncThread), \
          patch("webbrowser.open") as mock_webbrowser_open, \
-         patch("kovaaks_web.save_scores_cache") as mock_save:
+         patch("kovaaks.app.save_scores_cache") as mock_save:
         res = api.play_scenario("Pasu Voltaic Easy")
         assert res is True
         mock_webbrowser_open.assert_called_once()
@@ -404,8 +408,8 @@ def test_play_scenario_bg_zombie_notifies_frontend(mock_load_cache, mock_load_co
         assert any("fetchData" in call for call in calls)
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 def test_zombie_scenarios_included_in_rebuild_data(mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {
@@ -444,6 +448,7 @@ def test_log_panel_ui_elements():
     # Verify index.html contains log-context-menu and its items
     html_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "kovaaks",
         "web",
         "index.html"
     )
@@ -458,6 +463,7 @@ def test_log_panel_ui_elements():
     # Verify script.js contains the context menu logic, mousedown state tracking and the isSelectingLog helper
     js_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "kovaaks",
         "web",
         "script.js"
     )
@@ -472,8 +478,8 @@ def test_log_panel_ui_elements():
     assert "menu-log-selectall" in js_content
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 def test_get_clipboard_linux(mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -487,8 +493,8 @@ def test_get_clipboard_linux(mock_load_cache, mock_load_config):
         mock_check_output.assert_called_with(["xclip", "-selection", "clipboard", "-o"], text=True)
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 def test_get_clipboard_darwin(mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -502,8 +508,8 @@ def test_get_clipboard_darwin(mock_load_cache, mock_load_config):
         mock_check_output.assert_called_once_with(["pbpaste"], text=True)
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 def test_get_clipboard_windows(mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -524,8 +530,8 @@ def test_get_clipboard_windows(mock_load_cache, mock_load_config):
         assert val == "pasted_text_windows"
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
 def test_get_clipboard_tkinter_fallback(mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -550,6 +556,7 @@ def test_login_modal_enter_and_password_toggle():
     # Verify index.html contains show password toggles
     html_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "kovaaks",
         "web",
         "index.html"
     )
@@ -563,6 +570,7 @@ def test_login_modal_enter_and_password_toggle():
     # Verify script.js contains the keydown/enter key and toggle change listener logics
     js_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "kovaaks",
         "web",
         "script.js"
     )
@@ -576,9 +584,9 @@ def test_login_modal_enter_and_password_toggle():
     assert "Enter" in js_content
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 def test_fetch_all_stats_prevents_overlapping_fetches(mock_polling, mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -602,9 +610,9 @@ def test_fetch_all_stats_prevents_overlapping_fetches(mock_polling, mock_load_ca
         mock_thread.assert_called_once()
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 def test_rebuild_data_and_finish_passes_silent(mock_polling, mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -621,9 +629,9 @@ def test_rebuild_data_and_finish_passes_silent(mock_polling, mock_load_cache, mo
     mock_window.evaluate_js.assert_called_with("fetchData(false)")
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 def test_is_fetch_in_progress_and_cancel_fetch(mock_polling, mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -643,9 +651,9 @@ def test_is_fetch_in_progress_and_cancel_fetch(mock_polling, mock_load_cache, mo
     assert api.cancel_fetch() is False
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 def test_fetch_all_stats_sets_progress_flag_synchronously(mock_polling, mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -660,9 +668,9 @@ def test_fetch_all_stats_sets_progress_flag_synchronously(mock_polling, mock_loa
         mock_thread.assert_called_once()
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 def test_rebuild_data_and_cancelled_passes_silent(mock_polling, mock_load_cache, mock_load_config):
     mock_load_config.return_value = {"username": "testuser", "min_entries": 1000}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -682,6 +690,7 @@ def test_rebuild_data_and_cancelled_passes_silent(mock_polling, mock_load_cache,
 def test_auto_refresh_timer_prevents_redundant_resets():
     js_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "kovaaks",
         "web",
         "script.js"
     )
@@ -696,9 +705,9 @@ def test_auto_refresh_timer_prevents_redundant_resets():
     assert "currentAutoRefreshState.interval === interval" in js_content
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
 def test_get_stats_dir_default_fallback(mock_polling, mock_load_cache, mock_load_config):
     mock_load_config.return_value = {}
     mock_load_cache.return_value = {"scenarios": [], "scores": {}, "entry_history": {}}
@@ -709,10 +718,10 @@ def test_get_stats_dir_default_fallback(mock_polling, mock_load_cache, mock_load
     assert "FPSAimTrainer" in stats_dir or "stats" in stats_dir
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_stats_polling")
-@patch("kovaaks_web.save_scores_cache")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_stats_polling")
+@patch("kovaaks.app.save_scores_cache")
 @patch("threading.Thread")
 def test_stats_file_handler_events(mock_thread, mock_save_cache, mock_polling, mock_load_cache, mock_load_config, tmp_path):
     mock_load_config.return_value = {"stats_dir": str(tmp_path)}
@@ -750,11 +759,11 @@ def test_stats_file_handler_events(mock_thread, mock_save_cache, mock_polling, m
         assert "Bounce - Challenge - 2026.07.31 Stats.csv" in api._known_stat_files
 
 
-@patch("kovaaks_web.load_config")
-@patch("kovaaks_web.load_scores_cache")
-@patch("kovaaks_web.KovaaksAPI._start_file_watcher")
+@patch("kovaaks.app.load_config")
+@patch("kovaaks.app.load_scores_cache")
+@patch("kovaaks.app.KovaaksAPI._start_file_watcher")
 @patch("kovaaks.config_helpers.save_config")
-@patch("kovaaks_web.save_scores_cache")
+@patch("kovaaks.app.save_scores_cache")
 def test_save_settings_restarts_watcher(
     mock_save_cache, mock_save_config, mock_start_watcher, mock_load_cache, mock_load_config
 ):
@@ -766,5 +775,4 @@ def test_save_settings_restarts_watcher(
 
     api.save_settings({"stats_dir": "/new/dir"})
     mock_start_watcher.assert_called_once()
-
 

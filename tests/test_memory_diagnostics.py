@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from kovaaks import memory
-from kovaaks_web import KovaaksAPI
+from kovaaks.app import KovaaksAPI
 
 
 @pytest.fixture

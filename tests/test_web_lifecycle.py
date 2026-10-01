@@ -10,7 +10,7 @@ import pytest
 import kovaaks.cache as cache
 import kovaaks.config_helpers as config_helpers
 import kovaaks.logging_helpers as logging_helpers
-import kovaaks_web
+from kovaaks import app as kovaaks_web
 
 
 class SyncThread:

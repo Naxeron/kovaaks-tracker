@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from kovaaks import config_helpers, credentials, fetch_worker
-import kovaaks_web
+from kovaaks import app as kovaaks_web
 
 
 class SyncThread:

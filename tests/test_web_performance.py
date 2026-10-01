@@ -8,7 +8,7 @@ import subprocess
 import pytest
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "web" / "script.js"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "kovaaks" / "web" / "script.js"
 
 NODE_HARNESS = r"""
 const fs = require('fs');

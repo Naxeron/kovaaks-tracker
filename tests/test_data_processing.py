@@ -14,7 +14,7 @@ from unittest.mock import patch, MagicMock, PropertyMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import kovaaks_web
+from kovaaks import app as kovaaks_web
 
 
 def _make_app_stub(scenario_info, user_by_lid, friends_by_lid,
@@ -75,7 +75,7 @@ class TestRebuildDataRows:
 
         app = _make_app_stub(info, user, friends)
 
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             played, unplayed = app._rebuild_data()
 
         # lid-4 is below threshold but still in scenario_info for this test
@@ -93,7 +93,7 @@ class TestRebuildDataRows:
         friends = {str(k): v for k, v in sample_friend_scores.items()}
 
         app = _make_app_stub(info, user, friends)
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             played, unplayed = app._rebuild_data()
 
         # lid-1: user + friends → played
@@ -109,7 +109,7 @@ class TestRebuildDataRows:
         user = {"lid-x": {"rank": 100, "score": 5000.0, "date": "2026-01-01"}}
 
         app = _make_app_stub(info, user, {})
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             app._rebuild_data()
 
         row = app._all_data[0]
@@ -122,7 +122,7 @@ class TestRebuildDataRows:
         friends = {"lid-x": [{"friend": "Rival", "rank": 100, "score": 3500.0, "date": "2026-01-01"}]}
 
         app = _make_app_stub(info, user, friends)
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             app._rebuild_data()
 
         row = app._all_data[0]
@@ -134,7 +134,7 @@ class TestRebuildDataRows:
         friends = {"lid-x": [{"friend": "A", "rank": 50, "score": 9000.0, "date": "2026-01-01"}]}
 
         app = _make_app_stub(info, {}, friends)
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             app._rebuild_data()
 
         row = app._all_data[0]
@@ -152,7 +152,7 @@ class TestRebuildDataRows:
         }
 
         app = _make_app_stub(info, user, {})
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             app._rebuild_data()
 
         # Points = (entries - rank) summed
@@ -164,7 +164,7 @@ class TestRebuildDataRows:
         user = {"lid-a": {"rank": 100, "score": 1000, "date": "2026-01-01"}}
 
         app = _make_app_stub(info, user, {})
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             app._rebuild_data()
 
         # Potential = (rank - 1)
@@ -176,7 +176,7 @@ class TestRebuildDataRows:
         friends = {"lid-f": [{"friend": "Buddy", "rank": 100, "score": 5000.0, "date": ""}]}
 
         app = _make_app_stub(info, {}, friends)
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             app._rebuild_data()
 
         # Friends-only potential = (entries - 1)
@@ -187,7 +187,7 @@ class TestRebuildDataRows:
         info = {"lid-u": {"name": "Unplayed", "entries": 8000}}
 
         app = _make_app_stub(info, {}, {})
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             app._rebuild_data()
 
         assert app._global_potential_points_sum == 7999
@@ -201,7 +201,7 @@ class TestRebuildDataRows:
         ]}
 
         app = _make_app_stub(info, {}, friends)
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             app._rebuild_data()
 
         row = app._all_data[0]
@@ -214,7 +214,7 @@ class TestRebuildDataRows:
         user = {"lid-p": {"rank": 500, "score": 3000.0, "date": "2026-01-01"}}
 
         app = _make_app_stub(info, user, {})
-        with patch("kovaaks_web._get_local_stats", return_value={}):
+        with patch("kovaaks.app._get_local_stats", return_value={}):
             app._rebuild_data()
 
         row = app._all_data[0]
@@ -222,7 +222,7 @@ class TestRebuildDataRows:
         # Should be a numeric string
         int(row["Potential"])  # Should not raise
 
-    @patch('kovaaks_web.save_scores_cache')
+    @patch('kovaaks.app.save_scores_cache')
     @patch('kovaaks.api.get_next_leaderboard_position_points')
     def test_get_next_rank_points(self, mock_get_points, mock_save_cache):
         class KovaaksAPIStub:

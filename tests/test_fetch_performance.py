@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import kovaaks.cache as cache
 import kovaaks.fetch_worker as worker
-from kovaaks_web import KovaaksAPI
+from kovaaks.app import KovaaksAPI
 
 
 class InlineExecutor:

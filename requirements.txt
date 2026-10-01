@@ -1,4 +1,2 @@
-requests>=2.28.0
-pywebview>=6.0.0
-watchdog>=3.0.0
-keyring>=25.0.0
+# Compatibility entry point for existing source-checkout install commands.
+-r requirements/runtime.txt

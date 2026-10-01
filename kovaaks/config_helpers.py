@@ -12,10 +12,12 @@ import sys
 import tempfile
 import threading
 
+from .paths import DATA_DIR, PROJECT_DIR, existing_data_path, migrate_legacy_file
+
 logger = logging.getLogger("kovaaks")
 
-SCRIPT_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
+SCRIPT_DIR = PROJECT_DIR
+CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 
 _config_lock = threading.Lock()
 
@@ -31,21 +33,48 @@ def get_default_stats_dir():
             "/FPSAimTrainer/FPSAimTrainer/stats/")
 
 
-def load_config():
-    """Load config from disk, returning empty dict if missing or unreadable."""
+def _read_config(path):
+    """Return a valid config, or None without modifying an unreadable file."""
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
     except FileNotFoundError:
-        return {}
+        return None
     except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
         logger.warning("Could not load config: %s", e)
-        return {}
+        return None
 
     if not isinstance(cfg, dict):
         logger.warning("Could not load config: expected a JSON object")
-        return {}
+        return None
     return cfg
+
+
+def load_config():
+    """Load settings, moving a valid legacy config into data/ on first use."""
+    global CONFIG_PATH
+    with _config_lock:
+        path = existing_data_path(CONFIG_PATH)
+        cfg = _read_config(path)
+        if cfg is None:
+            if path != CONFIG_PATH and not os.path.lexists(path):
+                # A second process may have moved the legacy file between path
+                # selection and opening it. Read its published destination.
+                return _read_config(CONFIG_PATH) or {}
+            return {}
+        if path != CONFIG_PATH:
+            try:
+                migrate_legacy_file(path, CONFIG_PATH)
+            except OSError as e:
+                logger.warning("Could not move config to data directory: %s", e)
+                # Password cleanup and future saves must still update the file
+                # we loaded. A fresh launch will retry the preferred data path.
+                CONFIG_PATH = path
+            else:
+                # An existing destination always wins, including when another
+                # process created it after we read the legacy config.
+                cfg = _read_config(CONFIG_PATH)
+        return cfg or {}
 
 
 def save_config(cfg):
@@ -58,6 +87,7 @@ def save_config(cfg):
     with _config_lock:
         tmp_config = None
         try:
+            os.makedirs(os.path.dirname(CONFIG_PATH) or ".", exist_ok=True)
             with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", delete=False,
                 dir=os.path.dirname(CONFIG_PATH) or ".",

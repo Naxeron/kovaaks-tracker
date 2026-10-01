@@ -13,7 +13,7 @@ import requests
 from kovaaks import cache, fetch_worker
 from kovaaks.catalog import FrozenDict, FrozenList, freeze_catalog, freeze_json
 from kovaaks.history import CompactHistory
-from kovaaks_web import KovaaksAPI
+from kovaaks.app import KovaaksAPI
 
 
 @pytest.fixture
