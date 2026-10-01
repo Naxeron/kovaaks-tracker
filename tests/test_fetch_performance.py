@@ -115,7 +115,7 @@ def configure_fetch(monkeypatch, app, *, seconds_per_score=0, before_response=No
     monkeypatch.setattr(worker, "kovaaks_login", lambda *_, **__: "token")
     monkeypatch.setattr(worker, "kovaaks_get_friends_scores", fetch_scores)
     monkeypatch.setattr(worker, "save_scores_cache", unexpected_direct_save)
-    monkeypatch.setattr(worker.concurrent.futures, "ThreadPoolExecutor", InlineExecutor)
+    monkeypatch.setattr(worker, "DaemonThreadPoolExecutor", InlineExecutor)
     monkeypatch.setattr(worker, "time", SimpleNamespace(
         time=lambda: clock.value, monotonic=lambda: clock.value,
     ))

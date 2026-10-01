@@ -231,6 +231,7 @@ class TestRebuildDataRows:
                 self._cfg = {"username": ""}
                 self._scores_cache = {}
                 import threading
+                self._shutdown_event = threading.Event()
                 self._credentials_lock = threading.RLock()
                 self._data_lock = threading.RLock()
                 self._next_rank_lock = threading.Lock()

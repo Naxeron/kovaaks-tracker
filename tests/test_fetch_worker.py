@@ -15,7 +15,7 @@ class TestFetchWorkerWorkItems:
     @patch("concurrent.futures.as_completed")
     @patch("kovaaks.fetch_worker.fetch_gzip_json_from_github")
     @patch("kovaaks.fetch_worker.kovaaks_login")
-    @patch("concurrent.futures.ThreadPoolExecutor")
+    @patch("kovaaks.fetch_worker.DaemonThreadPoolExecutor")
     @patch("kovaaks.fetch_worker.save_scores_cache")
     def test_run_fetch_all_work_items_selection(self, mock_save, mock_executor, mock_login, mock_github, mock_as_completed):
         # 1. Setup mock app
@@ -64,7 +64,7 @@ class TestFetchWorkerWorkItems:
         captured_work_items = []
         
         # Mock as_completed to just yield the mock futures
-        mock_as_completed.side_effect = lambda futures: iter(futures)
+        mock_as_completed.side_effect = lambda futures, **_: iter(futures)
 
         def mock_submit(fn, lid, session):
             captured_work_items.append(lid)
@@ -91,7 +91,7 @@ class TestFetchWorkerWorkItems:
 
     @patch("kovaaks.fetch_worker.fetch_gzip_json_from_github")
     @patch("kovaaks.fetch_worker.kovaaks_login")
-    @patch("concurrent.futures.ThreadPoolExecutor")
+    @patch("kovaaks.fetch_worker.DaemonThreadPoolExecutor")
     def test_run_fetch_all_respects_cancellation(self, mock_executor, mock_login, mock_github):
         app = MagicMock()
         app._cfg = {"min_entries": 10}
@@ -174,7 +174,7 @@ def test_cancelled_fetch_discards_late_worker_result(monkeypatch, blocked_stage)
     monkeypatch.setattr(fetch_worker, "kovaaks_get_friends_scores", fetch_scores)
     monkeypatch.setattr(fetch_worker, "parse_leaderboard_entries", parse_scores)
     monkeypatch.setattr(fetch_worker, "save_scores_cache", save)
-    monkeypatch.setattr(fetch_worker.concurrent.futures, "ThreadPoolExecutor", RecordingExecutor)
+    monkeypatch.setattr(fetch_worker, "DaemonThreadPoolExecutor", RecordingExecutor)
 
     try:
         run_fetch_all(app, "test_user", "password")
@@ -293,7 +293,7 @@ def test_cancellation_finishes_existing_callback_before_next_fetch(monkeypatch):
             entered.set()
             assert release.wait(timeout=3), "Test did not release the UI callback"
 
-    def completed_after_cancel(futures):
+    def completed_after_cancel(futures, **kwargs):
         futures_seen.extend(futures)
         assert entered.wait(timeout=3), "Worker never entered its UI callback"
         done, _ = wait(futures, timeout=3, return_when=FIRST_COMPLETED)

@@ -276,7 +276,7 @@ def test_fallback_poll_leaves_new_runs_for_parser(monkeypatch, tmp_path):
             SimpleNamespace(st_mtime=0), SimpleNamespace(st_mtime=1),
         ]))
         polling.setattr(kovaaks_web.os.path, "exists", lambda _: True)
-        polling.setattr(kovaaks_web.time, "sleep", MagicMock(side_effect=[None, StopPolling]))
+        polling.setattr(api._shutdown_event, "wait", MagicMock(side_effect=[None, StopPolling]))
         with pytest.raises(StopPolling):
             api._poll_stats_loop()
 
@@ -318,7 +318,7 @@ def test_fallback_poll_detects_pending_file_completion(monkeypatch, tmp_path):
     with monkeypatch.context() as polling:
         polling.setattr(kovaaks_web.os, "stat", stat)
         polling.setattr(kovaaks_web.os.path, "exists", lambda _: True)
-        polling.setattr(kovaaks_web.time, "sleep", sleep)
+        polling.setattr(api._shutdown_event, "wait", sleep)
         with pytest.raises(StopPolling):
             api._poll_stats_loop()
 

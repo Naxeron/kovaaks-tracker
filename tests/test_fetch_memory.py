@@ -30,7 +30,7 @@ class DeferredExecutor:
         self.peak_pending = max(self.peak_pending, len(self.jobs))
         return future
 
-    def complete_one(self, futures):
+    def complete_one(self, futures, **kwargs):
         # Complete the newest job first, exercising out-of-order replenishment.
         future = next(reversed(self.jobs))
         assert future in futures
@@ -56,7 +56,7 @@ def refresh(monkeypatch):
     app._fetch_cancelled = False
     app._data_lock = threading.RLock()
     executor = DeferredExecutor(fetch_worker.API_FETCH_WORKERS)
-    monkeypatch.setattr(fetch_worker.concurrent.futures, "ThreadPoolExecutor", lambda **_: executor)
+    monkeypatch.setattr(fetch_worker, "DaemonThreadPoolExecutor", lambda **_: executor)
     monkeypatch.setattr(fetch_worker.concurrent.futures, "as_completed", executor.complete_one)
     monkeypatch.setattr(fetch_worker, "kovaaks_login", lambda *_, **__: "token")
     monkeypatch.setattr(fetch_worker, "save_scores_cache", MagicMock())

@@ -1,6 +1,7 @@
 """Regression tests for scenario pagination and accurate entry counts."""
 
 from unittest.mock import MagicMock
+import threading
 
 import pytest
 
@@ -22,7 +23,7 @@ def _mock_fetch(monkeypatch, pages, accurate_counts):
         response.json.return_value = page
         responses.append(response)
     request = MagicMock(side_effect=responses)
-    count = MagicMock(side_effect=lambda lid, session: accurate_counts[lid])
+    count = MagicMock(side_effect=lambda lid, session, **kwargs: accurate_counts[lid])
     monkeypatch.setattr(api, "api_request_with_retry", request)
     monkeypatch.setattr(api, "get_accurate_entry_count", count)
     monkeypatch.setattr(api.time, "sleep", lambda _: None)
@@ -82,3 +83,63 @@ def test_zero_threshold_fetches_all_pages(monkeypatch):
 
     assert len(scenarios) == 2
     assert request.call_count == 2
+
+
+@pytest.mark.parametrize("raises_cancel", [False, True])
+def test_cancel_fallback_when_every_count_request_is_blocked(monkeypatch, raises_cancel):
+    """Cancellation returns promptly and remains set for abandoned requests."""
+    entered = threading.Event()
+    release = threading.Event()
+    cancelled = threading.Event()
+    finished = threading.Event()
+    worker_finished = threading.Event()
+    checks_after_reset = []
+    errors = []
+    items = [_scenario(str(index), 1000) for index in range(5)]
+    original_items = [dict(item["counts"]) for item in items]
+    response = MagicMock()
+    response.json.return_value = {"data": items, "total": len(items)}
+
+    def count(lid, session, cancel_check):
+        entered.set()
+        try:
+            assert release.wait(timeout=3), "Test did not release the blocked count request"
+            checks_after_reset.append(cancel_check())
+            return 5
+        finally:
+            worker_finished.set()
+
+    def check_cancel():
+        if raises_cancel and cancelled.is_set():
+            raise api.RequestCancelled("Fetch cancelled")
+        return cancelled.is_set()
+
+    def fetch():
+        try:
+            api.fetch_all_scenarios(session=MagicMock(), cancel_check=check_cancel)
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(api, "API_FETCH_WORKERS", 1)
+    monkeypatch.setattr(api, "api_request_with_retry", MagicMock(return_value=response))
+    request = MagicMock(side_effect=count)
+    monkeypatch.setattr(api, "get_accurate_entry_count", request)
+    runner = threading.Thread(target=fetch, daemon=True)
+    try:
+        runner.start()
+        assert entered.wait(timeout=2)
+        cancelled.set()
+        assert finished.wait(timeout=2), "Cancellation waited for a stalled HTTP request"
+        assert len(errors) == 1 and isinstance(errors[0], api.RequestCancelled)
+        assert [item["counts"] for item in items] == original_items
+
+        cancelled.clear()
+        release.set()
+        assert worker_finished.wait(timeout=2)
+        assert checks_after_reset == [True]
+        request.assert_called_once()
+    finally:
+        release.set()
+        runner.join(timeout=3)

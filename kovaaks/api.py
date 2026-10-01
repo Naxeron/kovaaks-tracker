@@ -9,12 +9,14 @@ import base64
 import datetime
 import logging
 import time
+import threading
 import concurrent.futures
 from urllib.parse import urlsplit
 
 import requests
 
 from .rate_limit import RequestPacer, parse_retry_after
+from .background import DaemonThreadPoolExecutor
 
 logger = logging.getLogger("kovaaks")
 
@@ -217,6 +219,16 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, can
     url = "https://kovaaks.com/webapp-backend/scenario/popular"
     all_data = []
     page = 0
+    stopped = threading.Event()
+
+    def is_cancelled():
+        """Keep cancellation visible to late requests after the caller resets it."""
+        if not stopped.is_set():
+            try:
+                _check_cancelled(cancel_check)
+            except RequestCancelled:
+                stopped.set()
+        return stopped.is_set()
 
     if session is None:
         session = requests.Session()
@@ -229,15 +241,15 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, can
     start_time = time.time()
 
     # Single executor for the entire fetch (perf fix: was per-page before)
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=API_FETCH_WORKERS)
+    executor = DaemonThreadPoolExecutor(max_workers=API_FETCH_WORKERS)
     try:
         while True:
-            _check_cancelled(cancel_check)
+            _check_cancelled(is_cancelled)
             logger.debug("Fetching all scenarios page %d", page)
             params = {"page": page, "max": 100}
             resp = api_request_with_retry(
                 "get", url, params=params, session=session,
-                **({"cancel_check": cancel_check} if cancel_check is not None else {}))
+                cancel_check=is_cancelled)
             if resp is None:
                 break
             data = resp.json()
@@ -256,12 +268,17 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, can
             future_to_item = {
                 executor.submit(get_accurate_entry_count,
                                 it.get("leaderboardId"), session,
-                                **({"cancel_check": cancel_check} if cancel_check is not None else {})): it
+                                cancel_check=is_cancelled): it
                 for it in items
             }
-            for future in concurrent.futures.as_completed(future_to_item):
-                _check_cancelled(cancel_check)
-                item = future_to_item[future]
+            while future_to_item:
+                _check_cancelled(is_cancelled)
+                try:
+                    future = next(concurrent.futures.as_completed(future_to_item, timeout=0.1))
+                except concurrent.futures.TimeoutError:
+                    continue
+                _check_cancelled(is_cancelled)
+                item = future_to_item.pop(future)
                 accurate_count = future.result()
                 if accurate_count is None:
                     accurate_count = 0
@@ -300,8 +317,9 @@ def fetch_all_scenarios(min_entries=0, session=None, progress_callback=None, can
             page += 1
             if len(all_data) >= total:
                 break
-            time.sleep(0.1)
+            _retry_wait(0.1, is_cancelled)
     finally:
+        stopped.set()
         executor.shutdown(wait=False, cancel_futures=True)
 
     logger.info("Fetched %d total scenarios with accurate counts", len(all_data))

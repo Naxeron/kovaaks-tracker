@@ -14,6 +14,7 @@ import kovaaks_web
 def sync(monkeypatch, tmp_path):
     # Exercise the event handler without starting loaders, watchers, or a GUI.
     api = kovaaks_web.KovaaksAPI.__new__(kovaaks_web.KovaaksAPI)
+    api._shutdown_event = threading.Event()
     api._credentials_lock = threading.RLock()
     api._data_lock = threading.RLock()
     api._credentials_loaded_event = threading.Event()
@@ -134,3 +135,25 @@ def test_changed_response_from_previous_account_is_discarded(sync):
     api._queue_cache_save.assert_not_called()
     info.assert_not_called()
     assert refresh_count(api) == 2
+
+
+def test_shutdown_during_later_sync_keeps_accepted_scores_dirty(sync):
+    """Shutdown can persist earlier responses even if this batch never finishes."""
+    api, request, _, directory, filename = sync
+    second_filename = "Scenario B - Challenge - 2026.09.30-12.00.00 Stats.csv"
+    (directory / second_filename).write_text("Score:,100\n", encoding="utf-8")
+    api._scenario_info["two"] = {"name": "Scenario B"}
+
+    def fetch(token, lid, **kwargs):
+        if lid == "one":
+            return [{"webappUsername": "player", "rank": 1, "score": 150}]
+        assert api._scores_cache["_dirty"] is True
+        api._shutdown_event.set()
+        raise remote_api.RequestCancelled("Fetch cancelled")
+
+    request.side_effect = fetch
+    api._handle_new_stats_files(str(directory), [filename, second_filename])
+
+    assert api._scores_cache["scores"]["one"]["user"]["score"] == 150
+    assert api._scores_cache["_dirty"] is True
+    api._queue_cache_save.assert_not_called()

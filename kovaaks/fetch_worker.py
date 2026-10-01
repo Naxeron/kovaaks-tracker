@@ -17,6 +17,7 @@ from .api import (
     kovaaks_get_friends_scores,
 )
 from .cache import save_scores_cache
+from .background import DaemonThreadPoolExecutor
 from .catalog import freeze_catalog
 from .history import CompactHistory
 from .memory import log_memory, release_unused_memory
@@ -32,6 +33,12 @@ from .data_processing import (
 logger = logging.getLogger("kovaaks")
 
 DATASET_UNCHANGED = object()
+
+
+def _shutdown_requested(app):
+    """The shutdown signal stays set even after a fetch resets its cancel flag."""
+    event = getattr(app, "_shutdown_event", None)
+    return event is not None and event.is_set() is True
 
 
 @dataclass
@@ -94,7 +101,7 @@ def fetch_gzip_json_from_github(filename, app):
     url = f"{GITHUB_DATA_BASE}/{filename}"
 
     def check_cancel():
-        if getattr(app, "_fetch_cancelled", False) is True:
+        if getattr(app, "_fetch_cancelled", False) is True or _shutdown_requested(app):
             raise RequestCancelled("Fetch cancelled")
 
     for attempt in range(3):
@@ -208,7 +215,10 @@ def _bounded_score_futures(executor, function, items, session, stop_check, max_p
             return
         # Rebuilding this iterator covers only the small pending window. It also
         # lets newly submitted requests finish before older, slower requests.
-        future = next(concurrent.futures.as_completed(pending))
+        try:
+            future = next(concurrent.futures.as_completed(pending, timeout=0.1))
+        except concurrent.futures.TimeoutError:
+            continue
         pending.remove(future)
         yield future
 
@@ -232,8 +242,11 @@ def run_fetch_all(app, username, password, silent=False):
         """Queue only changed data; never compress inside the score-worker lock."""
         nonlocal cache_changed
         queue = getattr(type(app), "_queue_cache_save", None)
-        if cache_changed:
+        with data_lock:
+            dirty = app._scores_cache.pop("_dirty", False)
+            changed = cache_changed or dirty
             cache_changed = False
+        if changed:
             if queue is not None:
                 queue(app, wait=False)
             else:
@@ -248,7 +261,9 @@ def run_fetch_all(app, username, password, silent=False):
 
     def _is_cancelled():
         """Keep cancellation sticky for this run after the shared flag resets."""
-        if getattr(app, "_fetch_cancelled", False) is True:
+        if cancelled.is_set():
+            return True
+        if getattr(app, "_fetch_cancelled", False) is True or _shutdown_requested(app):
             cancelled.set()
         return cancelled.is_set()
 
@@ -281,9 +296,12 @@ def run_fetch_all(app, username, password, silent=False):
             if h_ts and h_data:
                 with data_lock:
                     local_history = scores_cache.setdefault("entry_history", {})
-                    merged_count = 0
-                    total_items = len(h_data)
-                    for idx, (lid, counts) in enumerate(h_data.items()):
+                merged_count = 0
+                total_items = len(h_data)
+                for idx, (lid, counts) in enumerate(h_data.items()):
+                    if _is_cancelled():
+                        raise RequestCancelled("Fetch cancelled")
+                    with data_lock:
                         lid_hist = local_history.get(str(lid))
                         if lid_hist is None:
                             lid_hist = local_history[str(lid)] = CompactHistory()
@@ -294,12 +312,19 @@ def run_fetch_all(app, username, password, silent=False):
                         if additions:
                             lid_hist.update(additions)
                             merged_count += len(additions)
-                        if idx % 1000 == 0:
-                            progress = 0.05 + 0.05 * (idx / total_items if total_items > 0 else 0)
-                            app._update_progress(progress, 1.0)
+                            cache_changed = True
+                            scores_cache["_dirty"] = True
+                    # Never hold the cache lock while waiting on the browser;
+                    # shutdown must be able to persist these accepted samples.
+                    if idx % 1000 == 0:
+                        progress = 0.05 + 0.05 * (idx / total_items if total_items > 0 else 0)
+                        app._update_progress(progress, 1.0)
+                with data_lock:
                     logger.info("Merged %d history points from GitHub", merged_count)
                     cache_changed = merged_count > 0 or cache_changed
                     cache_changed = prune_entry_history(local_history) or cache_changed
+                    if cache_changed:
+                        scores_cache["_dirty"] = True
                     mark_dataset_applied(app, "scenarios_history.json.gz")
 
         # The merged cache now owns the required samples. Do not retain the
@@ -349,6 +374,8 @@ def run_fetch_all(app, username, password, silent=False):
         with data_lock:
             cache_changed = scores_cache.get("scenarios") != all_scenarios or cache_changed
             scores_cache["scenarios"] = all_scenarios
+            if cache_changed:
+                scores_cache["_dirty"] = True
             app._cache_corrupted = False
             mark_dataset_applied(app, "scenarios.json.gz")
         app._update_progress(0.12, 1.0)
@@ -358,7 +385,7 @@ def run_fetch_all(app, username, password, silent=False):
         with data_lock:
             # Record and bound history before the first durable checkpoint.
             app._record_history_points(master)
-            cache_changed = scores_cache.pop("_dirty", False) or cache_changed
+            cache_changed = scores_cache.get("_dirty", False) or cache_changed
         app._update_progress(0.22, 1.0)
 
         scenario_info = {str(s.get("leaderboardId", "")): {
@@ -405,6 +432,8 @@ def run_fetch_all(app, username, password, silent=False):
         del master
         with data_lock:
             cache_changed = bool(scores_cache.pop("newly_played_scenarios", [])) or cache_changed
+            if cache_changed:
+                scores_cache["_dirty"] = True
 
         total_to_fetch = len(scenario_info)
         cached_count = 0
@@ -470,6 +499,8 @@ def run_fetch_all(app, username, password, silent=False):
                     cache_changed = scores_data.get(lid) != cache_entry or cache_changed
                     scores_data[lid] = cache_entry
                     scores_cache["scores"] = scores_data
+                    if cache_changed:
+                        scores_cache["_dirty"] = True
                 completed += 1
                 done = completed
 
@@ -496,7 +527,7 @@ def run_fetch_all(app, username, password, silent=False):
         session = requests.Session()
         session.mount("https://", requests.adapters.HTTPAdapter(
             pool_connections=API_FETCH_WORKERS, pool_maxsize=API_FETCH_WORKERS))
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=API_FETCH_WORKERS)
+        executor = DaemonThreadPoolExecutor(max_workers=API_FETCH_WORKERS)
         try:
             futures = _bounded_score_futures(
                 executor, _fetch_one, scenario_info, session,
@@ -533,7 +564,8 @@ def run_fetch_all(app, username, password, silent=False):
         try:
             persist_changes(wait=True)
         finally:
-            app._fetch_cancelled = False
+            if not _shutdown_requested(app):
+                app._fetch_cancelled = False
             app._fetch_in_progress = False
         log_memory("fetch finished")
         if completion is not None:

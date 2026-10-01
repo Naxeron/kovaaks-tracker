@@ -63,6 +63,12 @@ def _clean_aim_type(raw_type, scenario_name):
 class KovaaksAPI:
     def __init__(self):
         self.window = None
+        self._shutdown_event = threading.Event()
+        self._lifecycle_lock = threading.RLock()
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_complete = False
+        self._fetch_thread = None
+        self._watcher_cleanup_thread = None
         self._data_lock = threading.RLock()
         self._cfg = load_config()
         self._credentials_lock = threading.RLock()
@@ -178,7 +184,7 @@ class KovaaksAPI:
         from kovaaks.api import kovaaks_login
         token = kovaaks_login(username, password)
         with self._credentials_lock:
-            if generation != self._credential_generation:
+            if self._shutdown_event.is_set() or generation != self._credential_generation:
                 return None
             self._jwt_token = token
             return token
@@ -237,6 +243,7 @@ class KovaaksAPI:
 
     def set_window(self, window):
         self.window = window
+        window.events.closing += self._begin_shutdown
         if "pytest" in sys.modules:
             self._start_stats_polling()
         else:
@@ -244,6 +251,61 @@ class KovaaksAPI:
                 self._cache_loaded_event.wait()
                 self._start_stats_polling()
             threading.Thread(target=start_polling_bg, daemon=True).start()
+
+    def _begin_shutdown(self):
+        """Cancel work before the browser disappears, without blocking its loop."""
+        with self._lifecycle_lock:
+            if self._shutdown_event.is_set():
+                return
+            self._shutdown_event.set()
+            self._fetch_cancelled = True
+            self.window = None
+            if self._watcher_observer is not None:
+                observer = self._watcher_observer
+
+                def stop_watcher():
+                    # Watchdog.stop can itself join emitters without a timeout.
+                    # Keep it off the GUI and shutdown threads as well.
+                    try:
+                        observer.stop()
+                    except Exception:
+                        logger.exception("Could not stop stats watcher")
+                    finally:
+                        try:
+                            observer.join(timeout=1.0)
+                        except Exception:
+                            logger.exception("Could not join stats watcher")
+
+                self._watcher_cleanup_thread = threading.Thread(target=stop_watcher, daemon=True)
+                self._watcher_cleanup_thread.start()
+
+    def shutdown(self):
+        """Finish accepted cache updates after the GUI loop has stopped.
+
+        Network workers are cancellable daemon threads. A request stuck in the
+        OS must not delay exit; give the fetch coordinator a bounded chance to
+        checkpoint, then persist any remaining dirty data ourselves.
+        """
+        self._begin_shutdown()
+        with self._shutdown_lock:
+            if self._shutdown_complete:
+                return
+            try:
+                if self._fetch_thread is not None:
+                    self._fetch_thread.join(timeout=2.0)
+                if self._watcher_cleanup_thread is not None:
+                    self._watcher_cleanup_thread.join(timeout=1.0)
+            finally:
+                try:
+                    saved = self._flush_cache_saves()
+                    # Never replace a cache that is still loading or corrupt.
+                    if self._cache_loaded_event.is_set():
+                        with self._data_lock:
+                            dirty = self._scores_cache.pop("_dirty", False)
+                        if dirty or not saved:
+                            self._queue_cache_save(wait=True)
+                finally:
+                    self._shutdown_complete = True
 
     def _get_stats_dir(self):
         from kovaaks.config_helpers import get_default_stats_dir
@@ -275,6 +337,8 @@ class KovaaksAPI:
         """Serialize saves and coalesce pending updates; wait outside data locks."""
         if getattr(self, "_cache_corrupted", False):
             return False
+        with self._data_lock:
+            self._scores_cache.pop("_dirty", None)
         saved = self._cache_writer.request(wait=wait)
         if not saved:
             with self._data_lock:
@@ -605,8 +669,7 @@ class KovaaksAPI:
         # Trim imported samples for every scenario before the within-hour fast path.
         changed = prune_entry_history(history, now)
 
-        total_scenarios = len(scenarios_list)
-        for idx, s in enumerate(scenarios_list):
+        for s in scenarios_list:
             lid = str(s.get("leaderboardId", ""))
             try:
                 entries = int(s.get("counts", {}).get("entries", 0))
@@ -629,11 +692,8 @@ class KovaaksAPI:
             if len(lid_history) > 168:
                 for stamp in sorted(lid_history)[:-168]:
                     del lid_history[stamp]
-            
-            if idx % 1000 == 0 and hasattr(self, "_update_progress"):
-                progress = 0.15 + 0.07 * (idx / total_scenarios if total_scenarios > 0 else 0)
-                self._update_progress(progress, 1.0)
-
+        # The caller reports progress after releasing the cache lock. Browser
+        # callbacks may wait indefinitely if their window is closing.
         self._scores_cache["entry_history"] = history
         if changed:
             self._scores_cache["_dirty"] = True
@@ -741,7 +801,7 @@ class KovaaksAPI:
                         or (raw_official is not None and official is None)):
                     raise ValueError("Invalid global leaderboard points")
                 with self._credentials_lock:
-                    if (self._credential_generation != generation
+                    if (self._shutdown_event.is_set() or self._credential_generation != generation
                             or self._cfg.get("username", "").strip() != username):
                         result = "N/A"
                         return
@@ -751,6 +811,7 @@ class KovaaksAPI:
                                 "username": username, "points": points,
                                 "user_official_points": official, "timestamp": time.time(),
                             }
+                            self._scores_cache["_dirty"] = True
                         result = display(points, official)
                         self._queue_cache_save()
                     else:
@@ -1098,13 +1159,16 @@ class KovaaksAPI:
             return ""
 
     def fetch_all_stats(self, silent=False):
-        if getattr(self, "_fetch_in_progress", False):
-            logger.info("Fetch already in progress, skipping.")
-            return False
-        self._fetch_in_progress = True
-        self._fetch_cancelled = False
         def fetch_with_credentials():
             try:
+                for ready in (self._cache_loaded_event, self._credentials_loaded_event):
+                    while not ready.wait(timeout=0.1):
+                        if self._shutdown_event.is_set():
+                            self._fetch_in_progress = False
+                            return
+                if self._shutdown_event.is_set():
+                    self._fetch_in_progress = False
+                    return
                 username, password = self._get_login_credentials()
             except Exception:
                 self._fetch_in_progress = False
@@ -1113,9 +1177,23 @@ class KovaaksAPI:
                 finally:
                     self._update_progress(1, 1)
                 return
+            if self._shutdown_event.is_set():
+                self._fetch_in_progress = False
+                return
             # run_fetch_all owns completion and resets the flag in its finally.
             run_fetch_all(self, username, password, silent)
-        threading.Thread(target=fetch_with_credentials, daemon=True).start()
+        with self._lifecycle_lock:
+            if self._shutdown_event.is_set() or getattr(self, "_fetch_in_progress", False):
+                return False
+            self._fetch_in_progress = True
+            self._fetch_cancelled = False
+            self._fetch_thread = threading.Thread(target=fetch_with_credentials, daemon=True)
+            try:
+                self._fetch_thread.start()
+            except Exception:
+                self._fetch_thread = None
+                self._fetch_in_progress = False
+                raise
         return True
 
     def is_fetch_in_progress(self):
@@ -1215,6 +1293,8 @@ class KovaaksAPI:
         self._update_status(msg)
 
     def _start_stats_polling(self):
+        if self._shutdown_event.is_set():
+            return
         stats_dir = self._get_stats_dir()
         if stats_dir and os.path.exists(stats_dir):
             try:
@@ -1246,6 +1326,8 @@ class KovaaksAPI:
     def _start_file_watcher(self):
         """Start a watchdog-based file watcher for near-instant detection (~10ms).
         Falls back to mtime-based polling (250ms) if watchdog is unavailable."""
+        if self._shutdown_event.is_set():
+            return
         if getattr(self, "_watcher_observer", None) is not None:
             try:
                 self._watcher_observer.stop()
@@ -1268,7 +1350,7 @@ class KovaaksAPI:
 
             class StatsFileHandler(FileSystemEventHandler):
                 def _process_path(self, path):
-                    if not path:
+                    if not path or api_ref._shutdown_event.is_set():
                         return
                     fname = os.path.basename(path)
                     if not fname.endswith(" Stats.csv"):
@@ -1312,8 +1394,11 @@ class KovaaksAPI:
             observer = Observer()
             observer.schedule(StatsFileHandler(), stats_dir, recursive=False)
             observer.daemon = True
-            observer.start()
-            self._watcher_observer = observer
+            with self._lifecycle_lock:
+                if self._shutdown_event.is_set():
+                    return
+                observer.start()
+                self._watcher_observer = observer
             logger.info("Stats watcher: using watchdog/inotify for instant detection on '%s'", stats_dir)
             return
         except ImportError:
@@ -1338,8 +1423,7 @@ class KovaaksAPI:
             except OSError:
                 pass
 
-        while True:
-            time.sleep(0.25)
+        while not self._shutdown_event.wait(0.25):
             stats_dir = self._get_stats_dir()
             if not stats_dir or not os.path.exists(stats_dir):
                 continue
@@ -1393,6 +1477,8 @@ class KovaaksAPI:
                 logger.warning("Stats polling failed: %s", e)
 
     def _handle_new_stats_files(self, stats_dir, new_files):
+        if self._shutdown_event.is_set():
+            return
         # Extract scenario names from filenames immediately (no file I/O needed)
         snames = set()
         for fname in new_files:
@@ -1492,13 +1578,13 @@ class KovaaksAPI:
         session = requests.Session()
         def sync_cancelled():
             with self._credentials_lock:
-                return generation != self._credential_generation
+                return self._shutdown_event.is_set() or generation != self._credential_generation
 
         for lid, expected_score in lids_to_update.items():
             max_attempts = 5
             for attempt in range(max_attempts):
                 with self._credentials_lock:
-                    if generation != self._credential_generation:
+                    if self._shutdown_event.is_set() or generation != self._credential_generation:
                         return
                 try:
                     data = kovaaks_get_friends_scores(
@@ -1525,7 +1611,7 @@ class KovaaksAPI:
                             
                     if target_met or attempt == max_attempts - 1:
                         with self._credentials_lock, self._data_lock:
-                            if generation != self._credential_generation:
+                            if self._shutdown_event.is_set() or generation != self._credential_generation:
                                 return
                             cached_entry = self._scores_cache.setdefault("scores", {}).setdefault(lid, {})
                             if user_entry:
@@ -1540,7 +1626,9 @@ class KovaaksAPI:
                                     cached_entry["friends"] = friend_entries
                                     updated = True
                                 self._friends_by_lid[lid] = cached_entry["friends"]
-                            
+                            if updated:
+                                self._scores_cache["_dirty"] = True
+
                         break
                     else:
                         # Exponential backoff: 1s, 2s, 3s, 4s
@@ -1558,7 +1646,7 @@ class KovaaksAPI:
                     if isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 401:
                         logger.warning("Session expired during auto-update. Attempting re-login.")
                         with self._credentials_lock:
-                            if generation != self._credential_generation:
+                            if self._shutdown_event.is_set() or generation != self._credential_generation:
                                 return
                             self._jwt_token = None
                         if username and password:
@@ -1584,7 +1672,8 @@ class KovaaksAPI:
 
 
 
-if __name__ == "__main__":
+def main():
+    """Run the desktop window and always finish application shutdown."""
     api = KovaaksAPI()
     window = webview.create_window(
         "KovaaK's Scenario Tracker",
@@ -1608,5 +1697,8 @@ if __name__ == "__main__":
     try:
         webview.start(gui=gui_backend, debug=False)
     finally:
-        if not api._flush_cache_saves():
-            api._queue_cache_save(wait=True)
+        api.shutdown()
+
+
+if __name__ == "__main__":
+    main()
