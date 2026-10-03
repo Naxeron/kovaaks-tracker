@@ -14,20 +14,43 @@ from .data_processing import safe_float
 
 logger = logging.getLogger("kovaaks")
 
-LOCAL_STATS_CACHE_VERSION = 2
+LOCAL_STATS_CACHE_VERSION = 3
 
 
 def _compute_trend_and_pb(scores):
+    """Summarize the retained sample, counting ties as unsuccessful attempts."""
     trend, runs_since_pb = 1.0, 0
     if len(scores) >= 2:
         max_score = max(s[1] for s in scores)
-        runs_since_pb = len(scores) - 1 - max(i for i, s in enumerate(scores) if s[1] == max_score)
-        if runs_since_pb == len(scores) - 1:
-            runs_since_pb = 999
+        runs_since_pb = len(scores) - 1 - next(i for i, s in enumerate(scores) if s[1] == max_score)
         avg_change = (scores[-1][1] - scores[0][1]) / (len(scores) - 1)
         if max_score > 1.0:
             trend = max(0.5, min(2.0, 1.0 + (avg_change / max_score) * 5.0))
     return trend, runs_since_pb
+
+
+def _run_order(filename):
+    """Order valid stat filenames chronologically, breaking timestamp ties stably."""
+    return filename[:-10].rsplit(" - ", 2)[-1], filename
+
+
+def _record_pb_observation(entry, score, filename, played_at, previous_last_played):
+    """Record a valid score and report whether an older PB needs its age recounted."""
+    observations = entry.get("pb_observations", 0)
+    entry["pb_observations"] = observations + 1
+    best_score = entry.get("best_score")
+    best_file = entry.get("best_score_file")
+    improves = best_score is None or score > best_score
+    earlier_tie = best_file is not None and score == best_score and _run_order(filename) < _run_order(best_file)
+    if improves or earlier_tie:
+        entry["best_score"] = score
+        entry["best_score_file"] = filename
+        entry["runs_since_pb"] = 0
+        return observations > 0 and played_at <= previous_last_played
+    if best_file is not None and _run_order(filename) > _run_order(best_file):
+        entry["runs_since_pb"] = entry.get("runs_since_pb", 0) + 1
+    return False
+
 
 def get_local_stats(stats_dir, cache_dict=None):
     """Extract local scenario stats (counts, recency, trends) from the Steam stats directory.
@@ -52,6 +75,7 @@ def get_local_stats(stats_dir, cache_dict=None):
     if cache_dict is not None:
         if cache_dict.get("local_stats_version") != LOCAL_STATS_CACHE_VERSION:
             # Legacy watchers marked files parsed before their stats were read.
+            # Older caches also lack PB history beyond the ten-score trend sample.
             # Rebuild once, then retain the incremental cache on future calls.
             cache_dict.update({
                 "local_stats": {},
@@ -87,8 +111,9 @@ def get_local_stats(stats_dir, cache_dict=None):
                 except ValueError:
                     continue
 
-            sorted_new_files.sort(key=lambda x: x[0])
+            sorted_new_files.sort(key=lambda x: (x[0], x[1]))
             parsed_files = set()
+            pb_recounts = set()
 
             for dt, fname, sname in sorted_new_files:
                 # Read score from file
@@ -120,6 +145,8 @@ def get_local_stats(stats_dir, cache_dict=None):
                 
                 # Parse last_played date
                 last_played_dt = datetime.datetime.fromisoformat(entry["last_played"])
+                if _record_pb_observation(entry, score_val, fname, dt, last_played_dt):
+                    pb_recounts.add(sname)
                 if dt > last_played_dt:
                     entry["last_played"] = dt.isoformat()
 
@@ -137,6 +164,7 @@ def get_local_stats(stats_dir, cache_dict=None):
                 entry["trend"] = trend
                 entry["runs_since_recent_pb"] = runs_since_pb
                 entry["recent_scores"] = [[s[0].isoformat(), s[1]] for s in scores]
+                entry["recent_sample_count"] = len(scores)
 
                 parsed_files.add(fname)
                 newly_played = cache_dict.setdefault("newly_played_scenarios", [])
@@ -146,6 +174,17 @@ def get_local_stats(stats_dir, cache_dict=None):
             # Update cache dict known files list
             if parsed_files:
                 known_files.update(parsed_files)
+                # A late-arriving older PB can change the number of subsequent
+                # attempts. The known filenames suffice; never reopen old CSVs.
+                if pb_recounts:
+                    for sname in pb_recounts:
+                        local_stats_cache[sname]["runs_since_pb"] = 0
+                    for known_file in known_files:
+                        parts = known_file[:-10].rsplit(" - ", 2)
+                        if len(parts) == 3 and parts[0] in pb_recounts:
+                            entry = local_stats_cache[parts[0]]
+                            if _run_order(known_file) > _run_order(entry["best_score_file"]):
+                                entry["runs_since_pb"] += 1
                 cache_dict["known_stat_files"] = sorted(known_files)
                 cache_dict["_dirty"] = True
 
@@ -161,6 +200,10 @@ def get_local_stats(stats_dir, cache_dict=None):
                 "last_played": last_played,
                 "trend": entry.get("trend", 1.0),
                 "runs_since_recent_pb": entry.get("runs_since_recent_pb", 0),
+                "best_score": entry.get("best_score"),
+                "runs_since_pb": entry.get("runs_since_pb", 0),
+                "pb_observations": entry.get("pb_observations", 0),
+                "recent_sample_count": entry.get("recent_sample_count", 0),
                 "runs_today": 0
             }
 
@@ -182,20 +225,32 @@ def get_local_stats(stats_dir, cache_dict=None):
             if dt > data["last_played"]:
                 data["last_played"] = dt
 
-            if len(data["recent_scores"]) < 10:
-                try:
-                    with open(os.path.join(stats_dir, fname), "r", encoding="utf-8", errors="ignore") as f:
-                        for line in f:
-                            if line.startswith("Score:,"):
-                                data["recent_scores"].append((dt, float(line.split(",")[1])))
-                                break
-                except Exception:
-                    pass
+            # Without a cache, all scores are needed to establish the observed
+            # PB; only the most recent ten contribute to the trend below.
+            try:
+                with open(os.path.join(stats_dir, fname), "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if line.startswith("Score:,"):
+                            score_val = safe_float(line.split(",")[1], None)
+                            if score_val is not None and math.isfinite(score_val):
+                                data["recent_scores"].append((dt, score_val, fname))
+                            break
+            except OSError:
+                pass
 
         # Calculate trends
         for data in stats.values():
-            scores = sorted(data.pop("recent_scores"), key=lambda x: x[0])
-            trend, runs_since_pb = _compute_trend_and_pb(scores)
+            scores = sorted(data.pop("recent_scores"), key=lambda x: (x[0], x[2]))
+            best_score = max((score[1] for score in scores), default=None)
+            data["best_score"] = best_score
+            data["pb_observations"] = len(scores)
+            data["runs_since_pb"] = (
+                len(scores) - 1 - next(i for i, score in enumerate(scores) if score[1] == best_score)
+                if scores else 0
+            )
+            recent_scores = scores[-10:]
+            data["recent_sample_count"] = len(recent_scores)
+            trend, runs_since_pb = _compute_trend_and_pb(recent_scores)
             data["trend"] = trend
             data["runs_since_recent_pb"] = runs_since_pb
 

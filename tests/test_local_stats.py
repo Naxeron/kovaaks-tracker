@@ -14,6 +14,13 @@ from kovaaks.stats import get_local_stats as _get_local_stats
 import kovaaks.stats as stats_helpers
 
 
+def _write_score(directory, played_at, score):
+    filename = f"Scenario A - Challenge - {played_at:%Y.%m.%d-%H.%M.%S} Stats.csv"
+    path = directory / filename
+    path.write_text(f"Score:,{score}\n", encoding="utf-8")
+    return path
+
+
 class TestGetLocalStats:
     def test_returns_dict(self, stats_dir):
         result = _get_local_stats(stats_dir)
@@ -244,3 +251,146 @@ class TestGetLocalStats:
 
         assert _get_local_stats(str(tmp_path), cache)["Scenario A"]["count"] == 1
         assert cache["local_stats"]["Scenario A"]["recent_scores"] == [["2026-09-30T12:00:00", 0]]
+
+    @pytest.mark.parametrize("use_cache", [False, True])
+    def test_two_declining_runs_do_not_invent_a_plateau(self, tmp_path, use_cache):
+        first_run = datetime.datetime(2026, 9, 20, 12)
+        _write_score(tmp_path, first_run, 100)
+        _write_score(tmp_path, first_run + datetime.timedelta(minutes=1), 99)
+
+        result = _get_local_stats(str(tmp_path), {} if use_cache else None)["Scenario A"]
+
+        assert result["runs_since_recent_pb"] == 1
+        assert result["runs_since_pb"] == 1
+        assert result["pb_observations"] == 2
+        assert result["recent_sample_count"] == 2
+        assert result["best_score"] == 100
+
+    @pytest.mark.parametrize("use_cache", [False, True])
+    def test_observed_pb_survives_the_recent_trend_window(self, tmp_path, use_cache):
+        first_run = datetime.datetime(2026, 9, 20, 12)
+        for offset in range(25):
+            _write_score(tmp_path, first_run + datetime.timedelta(minutes=offset), 100 - offset)
+        cache = {} if use_cache else None
+
+        result = _get_local_stats(str(tmp_path), cache)["Scenario A"]
+
+        assert result["count"] == 25
+        assert result["best_score"] == 100
+        assert result["runs_since_pb"] == 24
+        assert result["pb_observations"] == 25
+        assert result["recent_sample_count"] == 10
+        assert result["runs_since_recent_pb"] == 9
+        assert "recent_scores" not in result
+        if cache is not None:
+            assert len(cache["local_stats"]["Scenario A"]["recent_scores"]) == 10
+            for field in ("best_score", "runs_since_pb", "pb_observations", "recent_sample_count"):
+                assert cache["local_stats"]["Scenario A"][field] == result[field]
+
+    @pytest.mark.parametrize("use_cache", [False, True])
+    def test_only_a_strict_score_improvement_resets_pb_age(self, tmp_path, use_cache):
+        first_run = datetime.datetime(2026, 9, 20, 12)
+        cache = {} if use_cache else None
+        expected_ages = [0, 1, 2, 0, 1, 2]
+        for offset, score in enumerate([100, 99, 100, 101, 101, 100]):
+            _write_score(tmp_path, first_run + datetime.timedelta(minutes=offset), score)
+            result = _get_local_stats(str(tmp_path), cache)["Scenario A"]
+
+            assert result["runs_since_pb"] == expected_ages[offset]
+            assert result["runs_since_recent_pb"] == expected_ages[offset]
+            assert result["pb_observations"] == offset + 1
+
+        assert result["best_score"] == 101
+
+    def test_pb_updates_only_read_new_files_and_unchanged_refresh_stays_clean(self, tmp_path, monkeypatch):
+        first_run = datetime.datetime(2026, 9, 20, 12)
+        for offset in range(15):
+            _write_score(tmp_path, first_run + datetime.timedelta(minutes=offset), 100 - offset)
+        cache = {}
+        _get_local_stats(str(tmp_path), cache)
+        cache.pop("_dirty")
+        new_file = _write_score(tmp_path, first_run + datetime.timedelta(minutes=15), 85)
+        real_open = open
+        opened = []
+
+        def only_new_file(path, *args, **kwargs):
+            assert str(path) == str(new_file), "Historical CSV files must not be reopened"
+            opened.append(str(path))
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(stats_helpers, "open", only_new_file, raising=False)
+        result = _get_local_stats(str(tmp_path), cache)
+        assert opened == [str(new_file)]
+        assert result["Scenario A"]["runs_since_pb"] == 15
+        assert result["Scenario A"]["pb_observations"] == 16
+        assert cache.pop("_dirty") is True
+        previous = deepcopy(cache)
+
+        assert _get_local_stats(str(tmp_path), cache) == result
+        assert cache == previous
+        assert opened == [str(new_file)]
+
+    @pytest.mark.parametrize("minutes, score, expected_best, expected_age", [
+        (-1, 99, 100, 2),
+        (-1, 100, 100, 3),
+        (-1, 110, 110, 3),
+        (1, 99, 100, 3),
+    ])
+    def test_older_arriving_files_update_pb_age_without_rereading_history(
+        self, tmp_path, monkeypatch, minutes, score, expected_best, expected_age
+    ):
+        first_run = datetime.datetime(2026, 9, 20, 12)
+        for offset, initial_score in [(0, 100), (2, 90), (4, 100)]:
+            _write_score(tmp_path, first_run + datetime.timedelta(minutes=offset), initial_score)
+        cache = {}
+        _get_local_stats(str(tmp_path), cache)
+        new_file = _write_score(tmp_path, first_run + datetime.timedelta(minutes=minutes), score)
+        real_open = open
+
+        def only_new_file(path, *args, **kwargs):
+            assert str(path) == str(new_file), "Historical CSV files must not be reopened"
+            return real_open(path, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(stats_helpers, "open", only_new_file, raising=False)
+            result = _get_local_stats(str(tmp_path), cache)["Scenario A"]
+
+        assert result["last_played"] == first_run + datetime.timedelta(minutes=4)
+        assert result["best_score"] == expected_best
+        assert result["runs_since_pb"] == expected_age
+        assert result["pb_observations"] == 4
+        assert result == _get_local_stats(str(tmp_path))["Scenario A"]
+
+    def test_version_two_cache_rebuilds_missing_pb_history_once(self, tmp_path, monkeypatch):
+        first_run = datetime.datetime(2026, 9, 20, 12)
+        paths = [
+            _write_score(tmp_path, first_run + datetime.timedelta(minutes=offset), 100 - offset)
+            for offset in range(15)
+        ]
+        cache = {
+            "local_stats_version": 2,
+            "known_stat_files": [path.name for path in paths],
+            "local_stats": {"Scenario A": {
+                "count": 15,
+                "last_played": (first_run + datetime.timedelta(minutes=14)).isoformat(),
+                "runs_since_recent_pb": 999,
+                "recent_scores": [],
+            }},
+        }
+
+        result = _get_local_stats(str(tmp_path), cache)
+
+        assert result["Scenario A"]["runs_since_pb"] == 14
+        assert result["Scenario A"]["best_score"] == 100
+        assert result["Scenario A"]["pb_observations"] == 15
+        assert result["Scenario A"]["runs_since_recent_pb"] == 9
+        assert cache["local_stats_version"] == stats_helpers.LOCAL_STATS_CACHE_VERSION
+        assert cache.pop("_dirty") is True
+        previous = deepcopy(cache)
+
+        def unexpected_read(*args, **kwargs):
+            raise AssertionError("Historical CSV files must not be reopened")
+
+        monkeypatch.setattr(stats_helpers, "open", unexpected_read, raising=False)
+        assert _get_local_stats(str(tmp_path), cache) == result
+        assert cache == previous

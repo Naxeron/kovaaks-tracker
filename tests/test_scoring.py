@@ -17,6 +17,7 @@ from kovaaks.scoring import (
     parse_popularity_metrics,
     calculate_potential_score,
     calculate_global_points,
+    calculate_rank_percentile,
 )
 
 
@@ -124,75 +125,111 @@ class TestParsePopularityMetrics:
 
 
 class TestCalculatePotentialScore:
-    def test_invalid_parameters_return_zero(self):
-        assert calculate_potential_score(0, 1000, {}, datetime.datetime.now(), 1.0) == 0
-        assert calculate_potential_score(500, 0, {}, datetime.datetime.now(), 1.0) == 0
-        assert calculate_potential_score(1500, 1000, {}, datetime.datetime.now(), 1.0) == 0
+    @pytest.mark.parametrize("rank,entries", [
+        (0, 1000), (500, 0), (1500, 1000), (-1, 1000),
+        ("bad", 1000), (500, None), (500, "bad"),
+        (float("nan"), 1000), (500, float("inf")),
+        (True, 1000), (500, True), (1.5, 1000), (500, 1000.5),
+        (10 ** 1000, 1000), (500, 10 ** 1000),
+    ])
+    def test_invalid_parameters_return_zero(self, rank, entries):
+        assert calculate_potential_score(rank, entries) == 0
+        assert calculate_rank_percentile(rank, entries) is None
+
+    def test_valid_percentile_accepts_integral_strings(self):
+        assert calculate_rank_percentile("200.0", "1000") == 80
+        assert calculate_rank_percentile(None, 1000) is None
 
     def test_base_unplayed_score(self):
-        now = datetime.datetime.now()
-        lstats = {}
-        # Unplayed scenario potential
-        potential = calculate_potential_score(500, 1000, lstats, now, 1.0)
-        assert potential > 0
-        # Time factor should be 1.5, fatigue_factor 1.0, plateau_penalty 1.0, trend_factor 1.0
-        # skill_gap = 1.0 - 50.0/100.0 = 0.5
-        # log_weight = log10(500) ~= 2.69897
-        # base_potential = 2.69897 * 0.5 = 1.349485
-        # final = (1.349485 * 1000) * 1.5 * 1.0 * 0.999715 * 1.0 * 1.0 = 2023.65
-        assert potential == 2023
+        # Unplayed scenarios start at zero contribution, so all target points count.
+        assert calculate_potential_score(None, 1000, expected_pct=80) == 800
+        assert calculate_potential_score(None, 1000) == 500
+        assert calculate_potential_score(None, 1000, expected_pct=0) == 0
 
-    def test_time_decay(self):
-        now = datetime.datetime.now()
-        # Played today vs played 20 days ago
-        lstats_recent = {"last_played": now.isoformat(), "runs_today": 0}
-        lstats_old = {"last_played": (now - datetime.timedelta(days=20)).isoformat(), "runs_today": 0}
-        
-        pot_recent = calculate_potential_score(100, 1000, lstats_recent, now, 1.0)
-        pot_old = calculate_potential_score(100, 1000, lstats_old, now, 1.0)
-        
-        # Played recently should have lower priority (less potential) than played long ago
-        assert pot_recent < pot_old
+    def test_more_attainable_points_outrank_smaller_board(self):
+        small = calculate_potential_score(500, 1000, expected_pct=80)
+        large = calculate_potential_score(30000, 100000, expected_pct=80)
+        assert (small, large) == (300, 10000)
+        assert large > small
 
-    def test_fatigue_penalty(self):
-        now = datetime.datetime.now()
-        lstats_fresh = {"runs_today": 0}
-        lstats_tired = {"runs_today": 12}  # fatigue factor e^(-12/12) = e^-1 ~= 0.368
-        
-        pot_fresh = calculate_potential_score(500, 1000, lstats_fresh, now, 1.0)
-        pot_tired = calculate_potential_score(500, 1000, lstats_tired, now, 1.0)
-        
-        assert pot_tired < pot_fresh
-        assert math.isclose(pot_tired / pot_fresh, math.exp(-1), rel_tol=0.01)
+    def test_equal_percentile_gaps_scale_with_points(self):
+        assert calculate_potential_score(5000, 10000, expected_pct=80) == 10 * (
+            calculate_potential_score(500, 1000, expected_pct=80))
 
-    def test_plateau_penalty(self):
+    def test_time_decay_is_neutral(self):
         now = datetime.datetime.now()
-        # No trend improvement and many runs since recent PB should decrease potential
-        lstats_improving = {"trend": 1.05, "runs_since_recent_pb": 40}
-        lstats_plateau = {"trend": 1.0, "runs_since_recent_pb": 40}
-        
-        pot_improving = calculate_potential_score(500, 1000, lstats_improving, now, 1.0)
-        pot_plateau = calculate_potential_score(500, 1000, lstats_plateau, now, 1.0)
-        
-        assert pot_plateau < pot_improving
+        # Played today vs played 20 days ago: time away is not evidence of gain.
+        recent = {"last_played": now.isoformat(), "runs_today": 0}
+        old = {"last_played": (now - datetime.timedelta(days=20)).isoformat()}
+        assert calculate_potential_score(100, 1000, recent, now, 1) == (
+            calculate_potential_score(100, 1000, old, now, 1))
+
+    def test_daily_fatigue_and_popularity_are_neutral(self):
+        # The old fatigue factor exp(-24/12) unfairly suppressed rested players.
+        fresh = calculate_potential_score(500, 1000, {}, competition_multiplier=0.2)
+        tired = calculate_potential_score(500, 1000, {"runs_today": 24},
+                                          competition_multiplier=10)
+        assert fresh == tired
+
+    def test_plateau_penalty_requires_real_observations(self):
+        base = calculate_potential_score(500, 1000, expected_pct=80)
+        for stats in ({"runs_since_recent_pb": 999},
+                      {"pb_observations": 2, "runs_since_pb": 999},
+                      {"pb_observations": 21, "runs_since_pb": 20}):
+            assert calculate_potential_score(500, 1000, stats, expected_pct=80) == base
+        priorities = [calculate_potential_score(500, 1000, {
+            "pb_observations": n + 1, "runs_since_pb": n,
+        }, expected_pct=80) for n in (20, 21, 40, 1000)]
+        assert priorities == sorted(priorities, reverse=True)
+        assert priorities[-1] >= 0.75 * base
+        assert priorities[0] - priorities[1] < 0.02 * base
+
+    def test_sparse_trends_stay_neutral_and_strong_trends_are_bounded(self):
+        base = calculate_potential_score(500, 1000, expected_pct=80)
+        for count in (0, 1, 2, 4):
+            stats = {"trend": 2, "count": 100, "recent_sample_count": count}
+            assert calculate_potential_score(500, 1000, stats, expected_pct=80) == base
+        for trend in (0, 0.99, 1.02, 1.0201, 2):
+            stats = {"trend": trend, "recent_sample_count": 10}
+            assert 0.9 * base <= calculate_potential_score(
+                500, 1000, stats, expected_pct=80) <= 1.1 * base
+
+    def test_unplayed_first_submission_ignores_local_plateau(self):
+        stats = {"pb_observations": 100, "runs_since_pb": 99,
+                 "recent_sample_count": 10, "trend": 0.5}
+        assert calculate_potential_score(None, 1000, stats, expected_pct=80) == 800
 
     def test_expected_pct_below_average(self):
-        now = datetime.datetime.now()
-        lstats = {}
-        # Rank 500 out of 1000 => current pct = 50%
-        # Case A: expected_pct is 80%. Target is 80%, so gap is 30%.
-        pot_below = calculate_potential_score(500, 1000, lstats, now, 1.0, expected_pct=80.0)
-        
-        # Case B: expected_pct is 50%. Target is 50%, so gap is 0% + stretch goal (5%) = 5%
-        pot_equal = calculate_potential_score(500, 1000, lstats, now, 1.0, expected_pct=50.0)
-        
-        assert pot_below > pot_equal
+        # Rank 500/1000 is 50th percentile; an 80th-percentile target means +300.
+        below = calculate_potential_score(500, 1000, expected_pct=80)
+        # At the category baseline, use 10% of remaining rank headroom instead.
+        equal = calculate_potential_score(500, 1000, expected_pct=50)
+        assert below == 300
+        assert equal == 50
+        assert below > equal
 
     def test_expected_pct_above_average(self):
-        now = datetime.datetime.now()
-        lstats = {}
-        # Rank 200 out of 1000 => current pct = 80%
-        # expected_pct is 60%. Current is above average. Target stretch goal is 80% + (20%)*0.1 = 82%.
-        # Gap is 2%.
-        pot_above = calculate_potential_score(200, 1000, lstats, now, 1.0, expected_pct=60.0)
-        assert pot_above > 0
+        # Above-category scores retain a stretch target; rank 1 has no upside.
+        assert calculate_potential_score(200, 1000, expected_pct=60) == 20
+        assert calculate_potential_score(1, 1000, expected_pct=100) == 0
+        assert calculate_potential_score(None, 1, expected_pct=100) == 0
+        # Preserve a nonzero opportunity at the smallest improvable rank.
+        assert calculate_potential_score(2, 1000, expected_pct=50) == 1
+
+    def test_priority_never_exceeds_remaining_points(self):
+        stats = {"trend": 2, "recent_sample_count": 10}
+        assert calculate_potential_score(500, 1000, stats, expected_pct=100) == 499
+        assert calculate_potential_score(None, 1000, stats, expected_pct=100) == 999
+
+    @pytest.mark.parametrize("stats", [None, [], {"trend": "bad"}, {
+        "trend": float("nan"), "recent_sample_count": "bad",
+        "pb_observations": float("inf"), "runs_since_pb": "bad",
+    }, {
+        "trend": 10 ** 1000, "recent_sample_count": 10 ** 1000,
+    }])
+    def test_missing_or_malformed_evidence_is_neutral(self, stats):
+        assert calculate_potential_score("500", "1000", stats, expected_pct=80) == 300
+
+    @pytest.mark.parametrize("target", [None, "bad", float("nan"), float("inf")])
+    def test_invalid_target_falls_back_to_neutral_percentile(self, target):
+        assert calculate_potential_score(None, 1000, expected_pct=target) == 500

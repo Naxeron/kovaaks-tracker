@@ -21,7 +21,7 @@ from kovaaks import credentials
 from kovaaks.cache import CacheWriter, load_scores_cache, load_scenarios_from_cache, save_scores_cache, SCORES_CACHE
 from kovaaks.history import CompactHistory
 from kovaaks.memory import log_memory
-from kovaaks.scoring import calculate_global_points, calculate_potential_score, parse_popularity_metrics, prune_entry_history
+from kovaaks.scoring import calculate_global_points, calculate_potential_score, calculate_rank_percentile, parse_popularity_metrics, prune_entry_history
 from kovaaks.stats import get_local_stats as _get_local_stats
 from kovaaks.fetch_worker import run_fetch_all
 from kovaaks.data_processing import safe_int, safe_float
@@ -470,20 +470,24 @@ class KovaaksAPI:
         candidate_sum_current_pts = 0
 
         aim_type_pcts = {}
+        current_pcts = {}
         for lid, info in scenario_info.items():
-            if (u_data := user_by_lid.get(lid)) and (entries := safe_int(info.get("entries", 0))) > 0:
-                if (rank := safe_int(u_data.get("rank"))) is not None:
+            if u_data := user_by_lid.get(lid):
+                pct = calculate_rank_percentile(u_data.get("rank"), info.get("entries"))
+                if pct is not None:
                     aim_type = _clean_aim_type(info.get("aimType"), info.get("name"))
-                    aim_type_pcts.setdefault(aim_type, []).append((1 - rank / entries) * 100)
+                    current_pcts[lid] = pct
+                    aim_type_pcts.setdefault(aim_type, []).append(pct)
 
         aim_type_avgs = {atype: sum(pcts) / len(pcts) for atype, pcts in aim_type_pcts.items()}
+        aim_type_sums = {atype: sum(pcts) for atype, pcts in aim_type_pcts.items()}
         all_pcts = [p for pcts in aim_type_pcts.values() for p in pcts]
-        global_avg_pct = sum(all_pcts) / len(all_pcts) if all_pcts else 50.0
+        total_pct = sum(all_pcts)
+        global_avg_pct = total_pct / len(all_pcts) if all_pcts else 50.0
         self._global_avg_pct = global_avg_pct
 
         self._refresh_local_stats()
         local_stats = self._local_stats_cache
-        now = datetime.datetime.now()
         entry_history = self._scores_cache.get("entry_history", {})
         popularity_timelines = {}
 
@@ -526,6 +530,22 @@ class KovaaksAPI:
                 "Potential": "",
                 "_is_zombie": is_zombie,
             }
+
+            # Calculate Potential Score (using category-specific expected percentile).
+            # Exclude this scenario from its own target. Five global-prior samples
+            # keep a thin aim category from making an overconfident recommendation.
+            cleaned_aim_type = _clean_aim_type(info.get("aimType"), sname)
+            own_pct = current_pcts.get(lid, 0.0)
+            own_count = int(lid in current_pcts)
+            peer_count = len(all_pcts) - own_count
+            prior_pct = (total_pct - own_pct) / peer_count if peer_count else 50.0
+            category_count = len(aim_type_pcts.get(cleaned_aim_type, [])) - own_count
+            category_sum = aim_type_sums.get(cleaned_aim_type, 0.0) - own_pct
+            potential_pct = (category_sum + 5 * prior_pct) / (category_count + 5)
+            row["Potential"] = str(calculate_potential_score(
+                (user_by_lid[lid].get("rank") or 0) if has_user else None,
+                info.get("entries"), lstats, expected_pct=potential_pct,
+            ))
 
             try:
                 e_val = int(info["entries"])
@@ -578,12 +598,6 @@ class KovaaksAPI:
                         entries = int(row["Entry Count"])
                         pct = (1 - rank / entries) * 100
                         row["Percentile"] = f"{pct:.2f}%"
-
-                        # Calculate Potential Score (using category-specific expected percentile)
-                        potential = calculate_potential_score(
-                            rank, entries, lstats, now, competition_multiplier, expected_pct=expected_pct
-                        )
-                        row["Potential"] = f"{potential}"
 
                     except (ValueError, TypeError, ZeroDivisionError):
                         row["Percentile"] = ""

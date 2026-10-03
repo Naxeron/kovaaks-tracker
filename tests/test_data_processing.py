@@ -12,6 +12,8 @@ import sys
 import threading
 from unittest.mock import patch, MagicMock, PropertyMock
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kovaaks import app as kovaaks_web
@@ -189,6 +191,7 @@ class TestRebuildDataRows:
 
         # Friends-only potential = (entries - 1)
         assert app._global_potential_points_sum == 7999
+        assert app._all_data[0]["Potential"] == "4000"
 
     def test_fully_unplayed_no_potential_accumulated(self):
         """Completely unplayed scenarios (no user, no friends) now contribute potential."""
@@ -199,6 +202,7 @@ class TestRebuildDataRows:
             app._rebuild_data()
 
         assert app._global_potential_points_sum == 7999
+        assert app._all_data[0]["Potential"] == "4000"
 
     def test_best_friend_is_highest_ranked(self):
         info = {"lid-x": {"name": "Test", "entries": 5000}}
@@ -229,6 +233,69 @@ class TestRebuildDataRows:
         assert row["Potential"] != ""
         # Should be a numeric string
         int(row["Potential"])  # Should not raise
+
+    def test_potential_targets_exclude_self_and_shrink_sparse_categories(self):
+        info = {
+            "a": {"name": "A", "entries": 1000, "aimType": "tracking"},
+            "b": {"name": "B", "entries": 1000, "aimType": "clicking"},
+            "c": {"name": "C", "entries": 1000, "aimType": "clicking"},
+        }
+        user = {lid: {"rank": rank, "score": 100} for lid, rank in (
+            ("a", 10), ("b", 800), ("c", 400))}
+        app = _make_app_stub(info, user, {})
+        with patch("kovaaks.app._get_local_stats", return_value={}), patch(
+                "kovaaks.app.calculate_potential_score",
+                wraps=kovaaks_web.calculate_potential_score) as calculate:
+            app._rebuild_data()
+
+        targets = [call.kwargs["expected_pct"] for call in calculate.call_args_list]
+        # A's 99th percentile cannot raise its own target: peers are 20 and 60.
+        assert targets[0] == 40
+        # B's one category peer (60) blends with five samples of global prior 79.5.
+        assert targets[1] == 76.25
+
+    def test_no_peers_uses_neutral_potential_target(self):
+        app = _make_app_stub({"a": {"name": "A", "entries": 1000}},
+                             {"a": {"rank": 800, "score": 100}}, {})
+        with patch("kovaaks.app._get_local_stats", return_value={}):
+            app._rebuild_data()
+        assert app._all_data[0]["Potential"] == "300"
+        # The existing global gain projection keeps its original category mean.
+        assert app._global_projected_gain_sum == 0
+
+    def test_invalid_user_rank_does_not_become_unplayed_opportunity_or_prior(self):
+        info = {lid: {"name": lid, "entries": 1000} for lid in ("missing", "bad", "new")}
+        user = {"missing": {"rank": None, "score": 100},
+                "bad": {"rank": 1500, "score": 100}}
+        app = _make_app_stub(info, user, {})
+        with patch("kovaaks.app._get_local_stats", return_value={}):
+            app._rebuild_data()
+        rows = {row["Scenario"]: row for row in app._all_data}
+        assert rows["missing"]["Potential"] == "0"
+        assert rows["bad"]["Potential"] == "0"
+        assert rows["new"]["Potential"] == "500"
+
+    def test_row_potential_uses_observed_pb_evidence(self):
+        app = _make_app_stub({"a": {"name": "A", "entries": 1000}},
+                             {"a": {"rank": 800, "score": 100}}, {})
+        stats = {"A": {"count": 41, "pb_observations": 41, "runs_since_pb": 40,
+                       "recent_sample_count": 10, "trend": 1.0}}
+        with patch("kovaaks.app._get_local_stats", return_value=stats):
+            app._rebuild_data()
+        assert 225 <= int(app._all_data[0]["Potential"]) < 300
+
+    @pytest.mark.parametrize("rank,entries", [
+        (True, 1000), (1.5, 1000), (1, True), (1, 1000.5),
+    ])
+    def test_nonintegral_or_boolean_evidence_does_not_raise_peer_targets(self, rank, entries):
+        info = {"bad": {"name": "Bad", "entries": entries},
+                "new": {"name": "New", "entries": 1000}}
+        app = _make_app_stub(info, {"bad": {"rank": rank, "score": 100}}, {})
+        with patch("kovaaks.app._get_local_stats", return_value={}):
+            app._rebuild_data()
+        rows = {row["Scenario"]: row for row in app._all_data}
+        assert rows["Bad"]["Potential"] == "0"
+        assert rows["New"]["Potential"] == "500"
 
     @patch('kovaaks.app.save_scores_cache')
     @patch('kovaaks.api.get_next_leaderboard_position_points')

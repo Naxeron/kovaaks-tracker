@@ -8,8 +8,30 @@ A vibe-coded tracker for KovaaKs. Built for rank farming, sniping friends, and o
 
 - **Rank Tracking** — Live updates via KovaaKs API with accurate stats (unlike the official website).
 - **Friend Sniping** — Compare scores side-by-side.
-- **Potential Score** — Smart practice algorithm recommending scenarios based on skill gap, fatigue, and trends.
+- **Potential Score** — Experimental practice priority based on attainable global-point opportunities, including unplayed scenarios.
 - **Autoplay** — Automatically launches the next scenario after you finish a run.
+
+## Trying the new Potential formula
+
+Sort **Potential** highest first to find point opportunities. Played scenarios
+use the rank gap to your performance on other scenarios in the same aim category;
+sparse categories blend toward your overall performance. Above-baseline scores
+retain a small stretch target of 10% of the remaining ranks. Unplayed scenarios
+use estimated points from a first submitted score. Rank 1 has zero rank upside;
+positive fractional priorities round up to at least 1 so near-top opportunities
+remain visible.
+
+At least five recent runs are needed for a small trend adjustment (at most ±10%).
+More than twenty observed attempts without improving the local PB gradually
+reduce priority, by at most 25%. Population growth, time away, and daily run
+count no longer multiply Potential. The first launch after this update rebuilds
+local stats once to track PBs beyond the ten most recent scores; later refreshes
+continue parsing only new files.
+
+Potential is a weighted opportunity score, not a guaranteed gain or a prediction
+of points per minute. It does not yet account for scenario duration or the score
+gaps between nearby players. The **Potential Points** total remains the maximum
+available points; it is separate from this practice priority.
 
 ## Download and run
 

@@ -1257,6 +1257,11 @@ function renderTable() {
     columnsToRender.forEach((col) => {
         const originalIndex = currentData.columns.indexOf(col);
         const th = document.createElement('th');
+        if (col === 'Potential') {
+            th.title = 'Experimental priority for gaining global points: category-based rank opportunity, with small adjustments for observed progress. Includes unplayed scenarios. Higher is better; this is not a guaranteed gain or points per minute.';
+        } else if (col === 'Trend Mult') {
+            th.title = 'Leaderboard population growth. Informational only; does not multiply Potential.';
+        }
         
         const labelStr = col + (originalIndex === sortCol ? (sortAsc ? ' ▲' : ' ▼') : '');
         

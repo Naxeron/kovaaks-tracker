@@ -15,6 +15,21 @@ from .history import CompactHistory
 logger = logging.getLogger("kovaaks")
 
 
+def calculate_rank_percentile(rank, entries):
+    """Return a valid leaderboard percentile, or None for inconsistent input."""
+    try:
+        position, population = safe_float(rank, None), safe_float(entries, None)
+        if (isinstance(rank, bool) or isinstance(entries, bool)
+                or position is None or population is None
+                or not math.isfinite(position) or not math.isfinite(population)
+                or not position.is_integer() or not population.is_integer()
+                or not 1 <= position <= population):
+            return None
+        return (1.0 - position / population) * 100.0
+    except OverflowError:
+        return None
+
+
 def calculate_global_points(scenarios, scores):
     """Sum unique cached leaderboard contributions before any display filters.
 
@@ -175,63 +190,63 @@ def parse_popularity_metrics(hist, now_datetime=None, *, timeline_cache=None):
     return popularity_trend, actual_new_entries
 
 
-def calculate_potential_score(rank, entries, lstats, now, competition_multiplier, expected_pct=None):
-    """Calculate Potential Score using a multi-factor priority algorithm.
+def calculate_potential_score(rank, entries, lstats=None, now=None,
+                              competition_multiplier=1.0, expected_pct=None):
+    """Estimate point opportunity, with small evidence-based practice modifiers.
 
-    1. Logarithmic Potential — neutralizes population bias
-    2. Spaced Repetition (Time Factor) — Ebbinghaus curve
-    3. Session Fatigue — decoupled from PB tracking
-    4. Variance-Modulated Plateau Penalty (Sigmoid Decay)
-    5. Active Learning Bonus — clamped trend factor
-    6. Competition Multiplier
+    ``rank=None`` means no submitted score; invalid ranks do not mean unplayed.
+    A category percentile supplies a heuristic target, with a 10% remaining-rank
+    stretch for players already above that target. This is neither a calibrated
+    prediction nor points per minute: durations and score distributions are not
+    yet available. ``now`` and ``competition_multiplier`` remain accepted for
+    older callers but no longer affect priority.
     """
-    if entries <= 0 or rank <= 0 or rank > entries:
-        return 0
-
     try:
-        pct = (1 - rank / entries) * 100
-        
-        # 1. Logarithmic Potential
-        if expected_pct is None:
-            skill_gap = 1.0 - pct / 100.0
-        else:
-            target_pct = max(expected_pct, pct + (100.0 - pct) * 0.1)
-            skill_gap = (target_pct - pct) / 100.0
-            
-        log_weight = math.log10(max(rank, 10))
-        base_potential = log_weight * skill_gap
+        def finite(value, default):
+            try:
+                number = safe_float(value, default)
+            except OverflowError:
+                return default
+            return number if number is not None and math.isfinite(number) else default
 
-        # 2. Spaced Repetition (Time Factor)
-        if lstats.get("last_played"):
-            last_played = lstats["last_played"]
-            if isinstance(last_played, str):
-                try:
-                    last_played = datetime.datetime.fromisoformat(last_played)
-                except ValueError:
-                    last_played = now
-            days_ago = (now - last_played).total_seconds() / 86400.0
-            time_factor = 0.8 + 0.7 * (1.0 - math.exp(-max(0.0, days_ago) / 14.0))
-        else:
-            time_factor = 1.5  # Maximum priority for unplayed benchmarks
+        unplayed = rank is None
+        if calculate_rank_percentile(entries if unplayed else rank, entries) is None:
+            return 0
+        population = safe_float(entries)
+        position = population if unplayed else safe_float(rank)
+        headroom = position - 1
+        if headroom == 0:
+            return 0
+        stats = lstats if isinstance(lstats, Mapping) else {}
 
-        # 3. Session Fatigue
-        runs_today = lstats.get("runs_today", 0)
-        fatigue_factor = math.exp(-runs_today / 12.0)
+        # 1. Point potential: each gained rank contributes one global point.
+        target_pct = max(0.0, min(100.0, finite(expected_pct, 50.0)))
+        target_rank = max(1, math.ceil(population * ((100.0 - target_pct) / 100.0) - 1e-9))
+        base_potential = max(0.0, position - target_rank)
+        if not unplayed:
+            base_potential = max(base_potential, headroom * 0.1)
 
-        # 4. Variance-Modulated Plateau Penalty (Sigmoid Decay)
-        pb_ago = lstats.get("runs_since_recent_pb", 0)
-        trend = lstats.get("trend", 1.0)
-        if trend <= 1.02:
-            plateau_penalty = 1.0 - (0.85 / (1.0 + math.exp(-0.4 * (pb_ago - 20.0))))
-        else:
-            plateau_penalty = 1.0
+        # 2. Spaced repetition: age alone does not establish attainable gains.
+        # 3. Session fatigue: a rolling daily count cannot establish readiness.
+        # Both are neutral until actual session performance can support them.
 
-        # 5. Active Learning Bonus
-        trend_factor = max(0.8, min(trend, 1.3))
+        # 4. Plateau penalty: real observed attempts, never the old 999 sentinel.
+        observations = max(0.0, finite(stats.get("pb_observations"), 0.0))
+        pb_ago = max(0.0, min(observations - 1, finite(stats.get("runs_since_pb"), 0.0)))
+        plateau_penalty = 1.0
+        if not unplayed and pb_ago > 20:
+            plateau_penalty -= 0.25 * (1.0 - math.exp(-(pb_ago - 20) / 20.0))
 
-        # 6. Final Potential
-        potential = (base_potential * 1000) * time_factor * fatigue_factor * plateau_penalty * trend_factor * competition_multiplier
-        return int(potential)
-    except (ValueError, TypeError, ZeroDivisionError) as e:
+        # 5. Active learning: sparse histories stay neutral; evidence is bounded.
+        samples = max(0.0, finite(stats.get("recent_sample_count"), 0.0))
+        confidence = max(0.0, min(1.0, (samples - 4.0) / 6.0))
+        trend = max(0.9, min(1.1, finite(stats.get("trend"), 1.0)))
+        trend_factor = 1.0 if unplayed else 1.0 + confidence * (trend - 1.0)
+
+        # 6. Final potential: population growth is informational, not a multiplier.
+        potential = base_potential * plateau_penalty * trend_factor
+        # Keep fractional stretch opportunities visible at ranks 2-10.
+        return min(int(headroom), max(1, round(potential))) if potential > 0 else 0
+    except (ValueError, TypeError, OverflowError, ZeroDivisionError) as e:
         logger.warning("Error calculating potential score: %s", e)
         return 0
