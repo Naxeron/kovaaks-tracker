@@ -3,6 +3,7 @@ Tests for Web UI API and play launcher.
 """
 import os
 import sys
+from html.parser import HTMLParser
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -193,6 +194,46 @@ def test_handle_new_stats_files_with_fetch(
         mock_login.assert_called_once_with("testuser", "password123")
         mock_save_cache.assert_called_once()
         mock_window.evaluate_js.assert_any_call("if(window.fetchData) window.fetchData()")
+
+
+def test_next_rank_tooltip_has_no_overlapping_native_tooltips():
+    """Keep the rank details visible without browser title popups covering them."""
+    class TooltipParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.containers = []
+            self.current = None
+            self.span_depth = 0
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if "tooltip-container" in attrs.get("class", "").split():
+                self.current = []
+                self.containers.append(self.current)
+            if self.current is not None:
+                self.current.append(attrs)
+                self.span_depth += tag == "span"
+
+        def handle_endtag(self, tag):
+            if self.current is not None and tag == "span":
+                self.span_depth -= 1
+                if self.span_depth == 0:
+                    self.current = None
+
+    html_path = os.path.join(os.path.dirname(__file__), "..", "kovaaks", "web", "index.html")
+    parser = TooltipParser()
+    with open(html_path, encoding="utf-8") as html_file:
+        parser.feed(html_file.read())
+
+    container = next(
+        elements for elements in parser.containers
+        if any(attrs.get("id") == "stat-next-rank" for attrs in elements)
+    )
+    assert all("title" not in attrs for attrs in container)
+    assert {
+        "next-rank-tooltip", "stat-live-gap", "stat-scenarios-left",
+        "stat-current-pct", "stat-required-pct",
+    } <= {attrs.get("id") for attrs in container}
 
 
 def test_style_css_selection():
@@ -775,4 +816,3 @@ def test_save_settings_restarts_watcher(
 
     api.save_settings({"stats_dir": "/new/dir"})
     mock_start_watcher.assert_called_once()
-
